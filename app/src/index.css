@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Theme color tokens — dark mode default */
+    --bg-base: #0B0F17;
+    --bg-surface: #111827;
+    --bg-surface-hover: #1A2234;
+    --bg-elevated: #161F2E;
+    --border-subtle: #1E293B;
+    --border-strong: #334155;
+    --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+    --accent-primary: #3B82F6;
+    --accent-primary-hover: #2563EB;
+    --accent-secondary: #6366F1;
+    --accent-glow: rgba(59,130,246,0.15);
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --up-red: #EF4444;
+    --down-green: #22C55E;
+    --chart-grid: #1E293B;
+    --chart-line: #3B82F6;
+    --chart-volume: rgba(59,130,246,0.3);
+    --chart-ma5: #F59E0B;
+    --chart-ma10: #8B5CF6;
+    --chart-ma20: #EC4899;
+    --chart-ma60: #64748B;
+
+    /* shadcn tokens */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  [data-theme="light"] {
+    --bg-base: #F8FAFC;
+    --bg-surface: #FFFFFF;
+    --bg-surface-hover: #F1F5F9;
+    --bg-elevated: #FFFFFF;
+    --border-subtle: #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #94A3B8;
+    --accent-primary: #2563EB;
+    --accent-primary-hover: #1D4ED8;
+    --accent-secondary: #4F46E5;
+    --accent-glow: rgba(37,99,235,0.15);
+    --success: #16A34A;
+    --warning: #D97706;
+    --danger: #DC2626;
+    --up-red: #DC2626;
+    --down-green: #16A34A;
+    --chart-grid: #E2E8F0;
+    --chart-line: #2563EB;
+    --chart-volume: rgba(37,99,235,0.3);
+    --chart-ma5: #D97706;
+    --chart-ma10: #7C3AED;
+    --chart-ma20: #DB2777;
+    --chart-ma60: #64748B;
+
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  [data-theme="dark"] {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 96%;
+    --card: 217 33% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 217 33% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 15%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 15%;
+    --muted-foreground: 215 16% 57%;
+    --accent: 217 33% 15%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 33% 18%;
+    --input: 217 33% 18%;
+    --ring: 217 91% 60%;
+    --sidebar-background: 217 33% 11%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 15%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 217 33% 18%;
+    --sidebar-ring: 217 91% 60%;
+  }
+
+  html {
+    transition: background-color 300ms ease-out, color 300ms ease-out;
+  }
+
+  body {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    @apply border-border;
+  }
+}
+
+@layer components {
+  .font-display {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 700;
+    font-size: 48px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+  .font-h1 {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 700;
+    font-size: 32px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .font-h2 {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 600;
+    font-size: 24px;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+  .font-h3 {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 1.4;
+  }
+  .font-body {
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .font-data-lg {
+    font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
+    font-weight: 600;
+    font-size: 28px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .font-data-md {
+    font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+  .font-data-sm {
+    font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
+    font-weight: 400;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .font-label {
+    font-family: "Inter", "PingFang SC", sans-serif;
+    font-weight: 500;
+    font-size: 11px;
+    line-height: 1.3;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+}
+
+@layer utilities {
+  .text-up {
+    color: var(--up-red);
+  }
+  .text-down {
+    color: var(--down-green);
+  }
+}

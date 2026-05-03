@@ -1,0 +1,41 @@
+from abc import ABC, abstractmethod
+from typing import AsyncGenerator
+
+from models.ai import AIAnalysis, AIReport
+
+
+class AIProvider(ABC):
+    @abstractmethod
+    async def analyze(
+        self,
+        symbol: str,
+        stock_name: str,
+        profile_data: dict,
+        financials_data: list[dict],
+        news_data: list[dict],
+    ) -> AIAnalysis:
+        ...
+
+    async def analyze_stream(
+        self,
+        symbol: str,
+        stock_name: str,
+        profile_data: dict,
+        financials_data: list[dict],
+        news_data: list[dict],
+    ) -> AsyncGenerator[tuple[str, object], None]:
+        """Yield (field_name, value) pairs as analysis fields become available."""
+        result = await self.analyze(symbol, stock_name, profile_data, financials_data, news_data)
+        for field_name, value in result.model_dump().items():
+            yield field_name, value
+
+    @abstractmethod
+    async def report(
+        self,
+        symbol: str,
+        stock_name: str,
+        profile_data: dict,
+        financials_data: list[dict],
+        news_data: list[dict],
+    ) -> AIReport:
+        ...

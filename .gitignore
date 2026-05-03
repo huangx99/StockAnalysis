@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Data (runtime generated)
+server/data/
+server/cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env
+.env.local
