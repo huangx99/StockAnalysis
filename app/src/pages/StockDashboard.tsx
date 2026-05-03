@@ -108,6 +108,7 @@ export default function StockDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [isFavorite, setIsFavorite] = useState(false)
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day')
+  const [klineLimit, setKlineLimit] = useState(250)
   const [aiStreaming, setAiStreaming] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
 
@@ -123,7 +124,7 @@ export default function StockDashboard() {
     // Fetch non-AI data in parallel
     const [p, k, f, n, s, d] = await Promise.allSettled([
       getStockProfile(symbol!),
-      getKLineData(symbol!, period),
+      getKLineData(symbol!, period, klineLimit),
       getFinancials(symbol!),
       getNews(symbol!),
       getStockStats(symbol!),
@@ -166,14 +167,18 @@ export default function StockDashboard() {
     if (!isValidSymbol) return
     setLoading((l) => ({ ...l, kline: true }))
     try {
-      const k = await getKLineData(symbol!, period)
+      const k = await getKLineData(symbol!, period, klineLimit)
       setKlineData(k)
     } catch {
       /* ignore */
     } finally {
       setLoading((l) => ({ ...l, kline: false }))
     }
-  }, [symbol, period, isValidSymbol])
+  }, [symbol, period, isValidSymbol, klineLimit])
+
+  const handleLoadAllKline = useCallback(() => {
+    setKlineLimit(0)
+  }, [])
 
   const handleRegenerateAI = useCallback(() => {
     if (!isValidSymbol) return
@@ -264,6 +269,8 @@ export default function StockDashboard() {
             loading={loading.kline}
             period={period}
             onPeriodChange={setPeriod}
+            onLoadAll={handleLoadAllKline}
+            hasFullData={klineLimit === 0}
           />
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import {
   ComposedChart,
   Bar,
@@ -11,7 +11,7 @@ import {
   Cell,
 } from 'recharts'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Calendar } from 'lucide-react'
 import type { KLineData } from '@/types'
 
 interface StockKLineChartProps {
@@ -19,6 +19,8 @@ interface StockKLineChartProps {
   loading: boolean
   period: 'day' | 'week' | 'month'
   onPeriodChange: (p: 'day' | 'week' | 'month') => void
+  onLoadAll: () => void
+  hasFullData: boolean
 }
 
 /* ── Candlestick bar shape ─────────────────────────────── */
@@ -28,25 +30,20 @@ function CandlestickShape(props: any) {
   const { open, high, low, close } = payload
   const isUp = close >= open
   const color = isUp ? '#EF4444' : '#22C55E'
-  const bodyTop = Math.min(open, close)
-  Math.max(open, close)
   const scaleY = height / (props.max - props.min || 1)
   const baseY = y
 
   const wickX = x + width / 2
-  const wickWidth = 1
 
   const bodyH = Math.max(Math.abs(close - open) * scaleY, 1)
-  const bodyY = baseY + (props.max - bodyTop) * scaleY
+  const bodyY = baseY + (props.max - Math.max(open, close)) * scaleY
   const wickTopY = baseY + (props.max - high) * scaleY
   const wickBottomY = baseY + (props.max - low) * scaleY
 
   return (
     <g>
-      {/* Wick */}
-      <rect x={wickX - wickWidth / 2} y={wickTopY} width={wickWidth} height={wickBottomY - wickTopY} fill={color} />
-      {/* Body */}
-      <rect x={x + 1} y={bodyY} width={width - 2} height={bodyH} fill={color} rx={1} />
+      <rect x={wickX - 0.5} y={wickTopY} width={1} height={wickBottomY - wickTopY} fill={color} />
+      <rect x={x + 1} y={bodyY} width={width - 2} height={bodyH} fill={isUp ? color : color} rx={1} />
     </g>
   )
 }
@@ -83,31 +80,138 @@ function CustomTooltip({ active, payload, label }: any) {
   )
 }
 
-export default function StockKLineChart({ data, loading, period, onPeriodChange }: StockKLineChartProps) {
+export default function StockKLineChart({
+  data,
+  loading,
+  period,
+  onPeriodChange,
+  onLoadAll,
+  hasFullData,
+}: StockKLineChartProps) {
   const [showMA, setShowMA] = useState({ ma5: true, ma10: true, ma20: true, ma60: true })
+  const chartRef = useRef<HTMLDivElement>(null)
+  const crosshairRef = useRef<HTMLDivElement>(null)
 
   const chartData = useMemo(() => {
     if (!data.length) return []
     return data.map((d) => ({
       ...d,
       isUp: d.close >= d.open,
-      volumeColor: d.close >= d.open ? 'var(--up-red)' : 'var(--down-green)',
     }))
   }, [data])
 
-  const priceRange = useMemo(() => {
-    if (!chartData.length) return { min: 0, max: 100 }
-    const prices = chartData.flatMap((d) => [d.high, d.low])
-    const min = Math.min(...prices)
-    const max = Math.max(...prices)
-    const pad = (max - min) * 0.1
-    return { min: min - pad, max: max + pad }
+  // First/last available dates from loaded data
+  const dataBounds = useMemo(() => {
+    if (!chartData.length) return { first: '', last: '' }
+    return { first: chartData[0].date, last: chartData[chartData.length - 1].date }
   }, [chartData])
 
-  const volumeMax = useMemo(() => {
-    if (!chartData.length) return 100
-    return Math.max(...chartData.map((d) => d.volume)) * 4
+  // Date range state
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const userAdjustedRef = useRef(false)
+
+  // Initialize/reset date range when underlying data changes
+  useEffect(() => {
+    if (!chartData.length) return
+    const last = chartData[chartData.length - 1].date
+    const first = chartData[0].date
+
+    if (userAdjustedRef.current) {
+      // Keep user's range but clamp to new data bounds
+      setStartDate((prev) => prev < first ? first : prev > last ? first : prev)
+      setEndDate((prev) => prev > last ? last : prev < first ? last : prev)
+    } else {
+      const d = new Date(last)
+      d.setFullYear(d.getFullYear() - 1)
+      const oneYearAgo = d.toISOString().split('T')[0]
+      setStartDate(oneYearAgo < first ? first : oneYearAgo)
+      setEndDate(last)
+    }
   }, [chartData])
+
+  // Filter by date range
+  const rangedData = useMemo(() => {
+    if (!chartData.length || !startDate || !endDate) return chartData
+    return chartData.filter((d) => d.date >= startDate && d.date <= endDate)
+  }, [chartData, startDate, endDate])
+
+  const priceRange = useMemo(() => {
+    if (!rangedData.length) return { min: 0, max: 100 }
+    const prices = rangedData.flatMap((d) => [d.high, d.low])
+    const min = Math.min(...prices)
+    const max = Math.max(...prices)
+    const pad = (max - min) * 0.08
+    return { min: min - pad, max: max + pad }
+  }, [rangedData])
+
+  const volumeMax = useMemo(() => {
+    if (!rangedData.length) return 100
+    return Math.max(...rangedData.map((d) => d.volume)) * 4
+  }, [rangedData])
+
+  const candleWidth = useMemo(() => {
+    const n = rangedData.length
+    if (n <= 60) return 6
+    if (n <= 120) return 4
+    if (n <= 300) return 3
+    return 2
+  }, [rangedData])
+
+  // Crosshair via DOM overlay
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!crosshairRef.current || !chartRef.current) return
+      const rect = chartRef.current.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      crosshairRef.current.style.left = `${(x / rect.width) * 100}%`
+      crosshairRef.current.style.opacity = '1'
+    },
+    [],
+  )
+
+  const handleMouseLeave = useCallback(() => {
+    if (crosshairRef.current) {
+      crosshairRef.current.style.opacity = '0'
+    }
+  }, [])
+
+  const handleLoadAll = () => {
+    if (!hasFullData) {
+      onLoadAll()
+    }
+    userAdjustedRef.current = true
+    if (dataBounds.first && dataBounds.last) {
+      setStartDate(dataBounds.first)
+      setEndDate(dataBounds.last)
+    }
+  }
+
+  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    userAdjustedRef.current = true
+    setStartDate(e.target.value)
+  }
+
+  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    userAdjustedRef.current = true
+    setEndDate(e.target.value)
+  }
+
+  const applyPreset = (months: number) => {
+    if (!dataBounds.last) return
+    userAdjustedRef.current = true
+    const d = new Date(dataBounds.last)
+    d.setMonth(d.getMonth() - months)
+    const start = d.toISOString().split('T')[0]
+    setStartDate(start < dataBounds.first ? dataBounds.first : start)
+    setEndDate(dataBounds.last)
+  }
+
+  const presets = [
+    { key: '1m', label: '近1月', months: 1 },
+    { key: '6m', label: '近半年', months: 6 },
+    { key: '1y', label: '近1年', months: 12 },
+  ]
 
   const periods: { key: 'day' | 'week' | 'month'; label: string }[] = [
     { key: 'day', label: '日K' },
@@ -147,6 +251,65 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
             </button>
           ))}
         </div>
+
+        {/* Preset buttons */}
+        <div className="flex items-center gap-1">
+          {presets.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => applyPreset(p.months)}
+              className="px-2 py-1 rounded text-xs font-medium transition-all"
+              style={{
+                backgroundColor: 'transparent',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Date range inputs */}
+        <div className="flex items-center gap-2">
+          <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+          <input
+            type="date"
+            value={startDate}
+            onChange={handleStartChange}
+            min={dataBounds.first}
+            max={endDate || dataBounds.last}
+            className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
+            style={{
+              backgroundColor: 'var(--bg-base)',
+              color: 'var(--text-primary)',
+            }}
+          />
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>至</span>
+          <input
+            type="date"
+            value={endDate}
+            onChange={handleEndChange}
+            min={startDate || dataBounds.first}
+            max={dataBounds.last}
+            className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
+            style={{
+              backgroundColor: 'var(--bg-base)',
+              color: 'var(--text-primary)',
+            }}
+          />
+          <button
+            onClick={handleLoadAll}
+            className="px-2 py-1 rounded text-xs font-medium transition-all"
+            style={{
+              backgroundColor: !hasFullData ? 'var(--accent-secondary)26' : 'transparent',
+              color: 'var(--text-muted)',
+            }}
+          >
+            全部
+          </button>
+        </div>
+
         <div className="flex items-center gap-2">
           {maButtons.map((ma) => (
             <button
@@ -194,17 +357,30 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
             initial={{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }}
             animate={{ opacity: 1, clipPath: 'inset(0 0% 0 0)' }}
             transition={{ duration: 0.8, ease: 'easeOut' }}
-            className="flex-1 min-h-[380px]"
+            className="flex-1 min-h-[380px] relative"
+            ref={chartRef}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
           >
+            {/* Crosshair overlay — pure CSS, no React re-renders */}
+            <div
+              ref={crosshairRef}
+              className="absolute top-0 bottom-0 w-px pointer-events-none z-10"
+              style={{
+                opacity: 0,
+                left: '50%',
+                borderLeft: '1px dashed var(--text-muted)',
+              }}
+            />
             <ResponsiveContainer width="100%" height={400}>
-              <ComposedChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+              <ComposedChart data={rangedData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'JetBrains Mono' }}
                   tickLine={false}
                   axisLine={{ stroke: 'var(--border-subtle)' }}
-                  minTickGap={30}
+                  minTickGap={40}
                 />
                 <YAxis
                   yAxisId="price"
@@ -230,24 +406,24 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
                 <Bar
                   yAxisId="volume"
                   dataKey="volume"
-                  barSize={chartData.length > 40 ? 2 : 4}
+                  barSize={candleWidth}
                   opacity={0.4}
                 >
-                  {chartData.map((entry, index) => (
+                  {rangedData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.isUp ? 'var(--up-red)' : 'var(--down-green)'} />
                   ))}
                 </Bar>
 
-                {/* Candlestick body via Bar with custom shape */}
+                {/* Candlestick */}
                 <Bar
                   yAxisId="price"
                   dataKey="close"
-                  barSize={chartData.length > 40 ? 3 : 6}
+                  barSize={candleWidth}
                   shape={(props: any) => (
                     <CandlestickShape {...props} max={priceRange.max} min={priceRange.min} />
                   )}
                 >
-                  {chartData.map((_entry, index) => (
+                  {rangedData.map((_entry, index) => (
                     <Cell key={`candle-${index}`} fill="transparent" />
                   ))}
                 </Bar>
@@ -262,7 +438,7 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
                     strokeWidth={1.5}
                     dot={false}
                     connectNulls
-                    animationDuration={600}
+                    animationDuration={400}
                   />
                 )}
                 {showMA.ma10 && (
@@ -274,8 +450,8 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
                     strokeWidth={1.5}
                     dot={false}
                     connectNulls
-                    animationDuration={600}
-                    animationBegin={200}
+                    animationDuration={400}
+                    animationBegin={100}
                   />
                 )}
                 {showMA.ma20 && (
@@ -287,8 +463,8 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
                     strokeWidth={1.5}
                     dot={false}
                     connectNulls
-                    animationDuration={600}
-                    animationBegin={400}
+                    animationDuration={400}
+                    animationBegin={200}
                   />
                 )}
                 {showMA.ma60 && (
@@ -300,8 +476,8 @@ export default function StockKLineChart({ data, loading, period, onPeriodChange 
                     strokeWidth={1.5}
                     dot={false}
                     connectNulls
-                    animationDuration={600}
-                    animationBegin={600}
+                    animationDuration={400}
+                    animationBegin={300}
                   />
                 )}
               </ComposedChart>

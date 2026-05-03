@@ -246,18 +246,21 @@ async def get_stock_profile(symbol: str) -> StockProfile:
     return profile
 
 
-async def get_kline_data(symbol: str, period: str = "day") -> list[KLineData]:
+async def get_kline_data(symbol: str, period: str = "day", limit: int = 0) -> list[KLineData]:
     cache_key = f"kline:{symbol}:{period}"
     if cache_key in kline_cache:
-        logger.info("[kline:%s:%s] cache HIT → %d records", symbol, period, len(kline_cache[cache_key]))
-        return kline_cache[cache_key]
+        full = kline_cache[cache_key]
+        result = full[-limit:] if limit > 0 else full
+        logger.info("[kline:%s:%s] cache HIT → %d records (limit=%d)", symbol, period, len(result), limit)
+        return result
 
     # Try local data store first
     local = data_store.load_stock_data(symbol, f"kline_{period}")
     if local is not None:
         logger.info("[kline:%s:%s] local HIT → %d records", symbol, period, len(local))
-        result = [KLineData(**item) for item in local]
-        kline_cache[cache_key] = result
+        full = [KLineData(**item) for item in local]
+        kline_cache[cache_key] = full
+        result = full[-limit:] if limit > 0 else full
         return result
 
     logger.info("[kline:%s:%s] cache MISS — fetching...", symbol, period)

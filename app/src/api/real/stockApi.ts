@@ -36,8 +36,11 @@ export async function getStockProfile(symbol: string): Promise<StockProfile> {
 export async function getKLineData(
   symbol: string,
   period: 'day' | 'week' | 'month' = 'day',
+  limit = 0,
 ): Promise<KLineData[]> {
-  return request(`${BASE}/stock/${symbol}/kline?period=${period}`);
+  const params = new URLSearchParams({ period });
+  if (limit > 0) params.set('limit', String(limit));
+  return request(`${BASE}/stock/${symbol}/kline?${params}`);
 }
 
 export async function getFinancials(symbol: string): Promise<FinancialStatement[]> {

@@ -21,8 +21,9 @@ async def profile(symbol: str):
 async def kline(
     symbol: str,
     period: str = Query("day", pattern="^(day|week|month)$"),
+    limit: int = Query(0, ge=0),
 ):
-    return await stock_service.get_kline_data(symbol, period)
+    return await stock_service.get_kline_data(symbol, period, limit)
 
 
 @router.get("/stock/{symbol}/financials", response_model=list[FinancialStatement])
