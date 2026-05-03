@@ -160,7 +160,7 @@ export default function StockDashboard() {
         setAiStreaming(false)
       },
     )
-  }, [symbol, period, isValidSymbol])
+  }, [symbol, isValidSymbol])
 
   const refreshKline = useCallback(async () => {
     if (!isValidSymbol) return

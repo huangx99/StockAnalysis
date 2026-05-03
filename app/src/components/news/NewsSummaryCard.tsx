@@ -34,7 +34,7 @@ function TypeBadge({ type }: { type: string }) {
   return (
     <span
       className="font-label px-2 py-0.5 rounded"
-      style={{ backgroundColor: 'var(--accent-primary)', opacity: 0.12, color: 'var(--accent-primary)' }}
+      style={{ backgroundColor: 'var(--accent-primary)1F', color: 'var(--accent-primary)' }}
     >
       {labels[type] || type}
     </span>
@@ -102,7 +102,7 @@ export default function NewsSummaryCard({ doc, index }: NewsSummaryCardProps) {
               <span
                 key={i}
                 className="font-label px-2 py-0.5 rounded"
-                style={{ backgroundColor: 'var(--danger)', opacity: 0.12, color: 'var(--danger)' }}
+                style={{ backgroundColor: 'var(--danger)1F', color: 'var(--danger)' }}
               >
                 {risk}
               </span>

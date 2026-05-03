@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Database, Download, RefreshCw, Trash2, Search,
   CheckCircle, XCircle, Loader2, ArrowRight,
-  ListOrdered, Pause, X, Building2, ChevronRight, Clock,
+  ListOrdered, Pause, X, Building2, ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,10 +16,10 @@ import { Input } from '@/components/ui/input'
 import {
   getDataStatus, getDataStocks, searchStocks as apiSearch,
   downloadStockData, refreshStockData, refreshAllData, deleteStockData,
-  startDataDownload, stopDataDownload,
-  getIndustries, getIndustryStocks,
+  startDataDownload, stopDataDownload, resetDataStatus,
+  getIndustries, getIndustryStocks, getSingleDownloadStatus,
 } from '@/api/real/stockApi'
-import type { StockDataSummary, StockSearchResult, DownloadStatus } from '@/types'
+import type { StockDataSummary, StockSearchResult, DownloadStatus, SingleDownloadProgress } from '@/types'
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -44,6 +44,7 @@ interface QueueItem {
   name: string
   status: 'pending' | 'downloading' | 'done' | 'error'
   message?: string
+  stats?: Record<string, number>
 }
 
 const QUEUE_KEY = 'data_download_queue'
@@ -74,6 +75,9 @@ export default function DataManager() {
   // Batch download
   const [batchStatus, setBatchStatus] = useState<DownloadStatus | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
+
+  // Single stock download progress
+  const [singleProgress, setSingleProgress] = useState<SingleDownloadProgress | null>(null)
 
   // Industry download
   const [showIndustry, setShowIndustry] = useState(false)
@@ -131,6 +135,38 @@ export default function DataManager() {
     }
   }, [batchStatus?.logs?.length])
 
+  // Auto-dismiss paused/completed status after 5 seconds
+  useEffect(() => {
+    if (batchStatus?.status === 'paused' || batchStatus?.status === 'completed') {
+      const timer = setTimeout(() => {
+        setBatchStatus(null)
+        resetDataStatus()
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [batchStatus?.status])
+
+  // Poll single stock download progress
+  useEffect(() => {
+    const downloading = queue.some(q => q.status === 'downloading')
+    if (!downloading) {
+      setSingleProgress(null)
+      return
+    }
+    const timer = setInterval(async () => {
+      try {
+        const s = await getSingleDownloadStatus()
+        setSingleProgress(s)
+      } catch {}
+    }, 1500)
+    return () => clearInterval(timer)
+  }, [queue])
+
+  const dismissBatchStatus = () => {
+    setBatchStatus(null)
+    resetDataStatus()
+  }
+
   // Debounced search
   useEffect(() => {
     const q = searchQuery.trim()
@@ -158,7 +194,15 @@ export default function DataManager() {
       try {
         const res = await downloadStockData(current[i].symbol)
         if (res.status === 'ok') {
-          current[i] = { ...current[i], status: 'done', message: '完成' }
+          const stats = (res as any).stats || {}
+          const labelMap: Record<string, string> = {
+            kline_day: '日K', kline_week: '周K', kline_month: '月K',
+            financials: '财务', news: '新闻', dividends: '分红', profile: '基本信息',
+          }
+          const parts = Object.entries(stats as Record<string, number>)
+            .filter(([, v]) => v > 0)
+            .map(([k, v]) => `${labelMap[k] || k}:${v}`)
+          current[i] = { ...current[i], status: 'done', message: parts.join(', ') || '完成', stats }
         } else {
           current[i] = { ...current[i], status: 'error', message: res.message || '失败' }
         }
@@ -329,9 +373,19 @@ export default function DataManager() {
               {batchStatus.status === 'paused' && <Pause className="w-3.5 h-3.5 inline mr-1.5" />}
               全量下载 {batchStatus.status === 'running' ? '进行中' : batchStatus.status === 'completed' ? '已完成' : '已暂停'}
             </span>
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {batchStatus.completed}/{batchStatus.total} {batchProgress.toFixed(1)}%
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {batchStatus.completed}/{batchStatus.total} {batchProgress.toFixed(1)}%
+              </span>
+              {batchStatus.status !== 'running' && (
+                <button
+                  onClick={dismissBatchStatus}
+                  className="p-0.5 rounded hover:bg-bg-elevated transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                </button>
+              )}
+            </div>
           </div>
           <div className="h-3 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-elevated)' }}>
             <div className="h-full rounded-full transition-all" style={{ width: `${batchProgress}%`, backgroundColor: 'var(--accent-primary)' }} />
@@ -377,32 +431,101 @@ export default function DataManager() {
               清除已完成
             </Button>
           </div>
-          <div className="max-h-60 overflow-y-auto">
-            {queue.map((item) => (
+          {/* Progress bar */}
+          <div className="px-4 pt-3 pb-1">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {queue.filter(q => q.status === 'done').length}/{queue.length} 已完成
+              </span>
+              {activeQueue.length > 0 && (
+                <span className="text-xs font-mono" style={{ color: 'var(--accent-primary)' }}>
+                  {queue.find(q => q.status === 'downloading')?.symbol || ''}
+                </span>
+              )}
+            </div>
+            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-elevated)' }}>
               <div
-                key={item.id}
-                className="flex items-center justify-between px-4 py-2 border-b border-border-subtle last:border-b-0"
-              >
-                <div className="flex items-center gap-2">
-                  {item.status === 'downloading' && <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: 'var(--accent-primary)' }} />}
-                  {item.status === 'pending' && <Clock className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />}
-                  {item.status === 'done' && <CheckCircle className="w-3.5 h-3.5" style={{ color: 'var(--up-red)' }} />}
-                  {item.status === 'error' && <XCircle className="w-3.5 h-3.5" style={{ color: 'var(--down-green)' }} />}
-                  <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{item.symbol}</span>
-                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{item.name}</span>
-                  {item.message && item.status === 'error' && (
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.message}</span>
-                  )}
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${queue.length > 0 ? (queue.filter(q => q.status === 'done' || q.status === 'error').length / queue.length) * 100 : 0}%`,
+                  backgroundColor: 'var(--accent-primary)',
+                }}
+              />
+            </div>
+          </div>
+          {/* Log entries */}
+          <div className="max-h-48 overflow-y-auto px-4 pb-2">
+            {queue.filter(q => q.status === 'done' || q.status === 'error').map((item) => (
+              <div key={item.id} className="flex items-start gap-2 py-1 border-b border-border-subtle last:border-b-0">
+                {item.status === 'done' ? (
+                  <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: 'var(--up-red)' }} />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: 'var(--down-green)' }} />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{item.symbol}</span>
+                    <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{item.name}</span>
+                  </div>
+                  <span className="text-xs" style={{ color: item.status === 'done' ? 'var(--text-muted)' : 'var(--down-green)' }}>
+                    {item.message}
+                  </span>
                 </div>
-                <button
-                  onClick={() => removeFromQueue(item.id)}
-                  className="p-1 rounded hover:bg-bg-elevated transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                <button onClick={() => removeFromQueue(item.id)} className="p-0.5 rounded hover:bg-bg-elevated shrink-0">
+                  <X className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
                 </button>
               </div>
             ))}
+            {/* Pending items count */}
+            {queue.filter(q => q.status === 'pending').length > 0 && (
+              <div className="py-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                还有 {queue.filter(q => q.status === 'pending').length} 只等待下载...
+              </div>
+            )}
           </div>
+          {/* Currently downloading item */}
+          {activeQueue.length > 0 && (
+            <div className="px-4 py-2 border-t border-border-subtle space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                <span className="font-mono text-xs" style={{ color: 'var(--accent-primary)' }}>
+                  {activeQueue[0].symbol}
+                </span>
+                <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{activeQueue[0].name}</span>
+                {singleProgress?.status === 'running' && singleProgress.dataTypes && (
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {singleProgress.completedTypes?.length ?? 0}/{singleProgress.dataTypes.length}
+                  </span>
+                )}
+                {(!singleProgress || singleProgress.status === 'idle') && (
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>下载中...</span>
+                )}
+              </div>
+              {singleProgress?.status === 'running' && singleProgress.dataTypes && (
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-elevated)' }}>
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${((singleProgress.completedTypes?.length ?? 0) / singleProgress.dataTypes.length) * 100}%`,
+                      backgroundColor: 'var(--accent-primary)',
+                    }}
+                  />
+                </div>
+              )}
+              {singleProgress?.status === 'running' && singleProgress.currentIndex !== undefined && singleProgress.dataTypes && (
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  正在获取: {DATA_TYPE_LABELS[singleProgress.dataTypes[singleProgress.currentIndex]] || singleProgress.dataTypes[singleProgress.currentIndex]}
+                </div>
+              )}
+              {singleProgress?.logs && singleProgress.logs.length > 0 && (
+                <div className="max-h-20 overflow-y-auto font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {singleProgress.logs.slice(-5).map((entry, i) => (
+                    <div key={i}>{entry}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </motion.div>
       )}
 

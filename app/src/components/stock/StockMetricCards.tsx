@@ -30,7 +30,7 @@ function MetricCard({ label, value, context, isPositive, delay }: MetricCardProp
     >
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-1">
-          <span className="font-label" style={{ color: 'var(--text-muted)' }}>{label}</span>
+          <span className="font-label" style={{ color: 'var(--text-secondary)' }}>{label}</span>
           <span className="font-data-lg tabular-nums" style={{ color: 'var(--text-primary)', fontSize: '24px' }}>
             {value}
           </span>

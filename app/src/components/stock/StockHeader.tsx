@@ -46,13 +46,13 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
             </span>
             <span
               className="font-label px-1.5 py-0.5 rounded"
-              style={{ backgroundColor: 'var(--accent-primary)', opacity: 0.15, color: 'var(--accent-primary)' }}
+              style={{ backgroundColor: 'var(--accent-primary)26', color: 'var(--accent-primary)' }}
             >
               {marketTag}
             </span>
             <span
               className="font-label px-1.5 py-0.5 rounded"
-              style={{ backgroundColor: 'var(--text-secondary)', opacity: 0.12, color: 'var(--text-secondary)' }}
+              style={{ backgroundColor: 'var(--text-secondary)1F', color: 'var(--text-secondary)' }}
             >
               {profile.industry}
             </span>
@@ -95,8 +95,7 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
             )}
             {profile.change60d !== 0 && (
               <span className="font-label px-1.5 py-0.5 rounded" style={{
-                backgroundColor: profile.change60d >= 0 ? 'var(--up-red)' : 'var(--down-green)',
-                opacity: 0.15,
+                backgroundColor: profile.change60d >= 0 ? 'var(--up-red)26' : 'var(--down-green)26',
                 color: profile.change60d >= 0 ? 'var(--up-red)' : 'var(--down-green)',
               }}>
                 <MetricTooltip label="60日涨跌幅" /> {profile.change60d >= 0 ? '+' : ''}{profile.change60d.toFixed(2)}%
@@ -104,8 +103,7 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
             )}
             {profile.changeYtd !== 0 && (
               <span className="font-label px-1.5 py-0.5 rounded" style={{
-                backgroundColor: profile.changeYtd >= 0 ? 'var(--up-red)' : 'var(--down-green)',
-                opacity: 0.15,
+                backgroundColor: profile.changeYtd >= 0 ? 'var(--up-red)26' : 'var(--down-green)26',
                 color: profile.changeYtd >= 0 ? 'var(--up-red)' : 'var(--down-green)',
               }}>
                 <MetricTooltip label="年初至今" /> {profile.changeYtd >= 0 ? '+' : ''}{profile.changeYtd.toFixed(2)}%

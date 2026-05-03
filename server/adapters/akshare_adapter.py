@@ -1,8 +1,10 @@
+import json
 import logging
 import time
 
 import akshare as ak
 import pandas as pd
+import requests
 
 from .column_schemas import (
     SPOT_EM_COLUMNS,
@@ -82,13 +84,12 @@ def fetch_stock_hist(
 ) -> pd.DataFrame:
     logger.info("[adapter] calling stock_zh_a_hist(%s, %s, %s, %s)...", symbol, period, start_date, end_date)
     t0 = time.time()
-    df = ak.stock_zh_a_hist(
-        symbol=symbol,
-        period=period,
-        start_date=start_date,
-        end_date=end_date,
-        adjust=adjust,
-    )
+    kwargs = {"symbol": symbol, "period": period, "adjust": adjust}
+    if start_date:
+        kwargs["start_date"] = start_date
+    if end_date:
+        kwargs["end_date"] = end_date
+    df = ak.stock_zh_a_hist(**kwargs)
     logger.info("[adapter] stock_zh_a_hist(%s) returned %d rows in %.2fs", symbol, len(df), time.time() - t0)
     return _validate_and_normalize_df(df, HIST_COLUMNS, "stock_zh_a_hist")
 
@@ -104,20 +105,95 @@ def fetch_stock_info(symbol: str) -> pd.DataFrame:
 
 
 def fetch_stock_news(symbol: str) -> pd.DataFrame:
-    if not hasattr(ak, "stock_news_em"):
-        raise AKShareAdapterError("stock_news_em not available in this AKShare version")
-    # Retry to handle transient TLS errors from curl_cffi
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            df = ak.stock_news_em(symbol=symbol)
-            return _validate_and_normalize_df(df, NEWS_COLUMNS, "stock_news_em")
-        except Exception as e:
-            last_err = e
-            if attempt < 2:
-                import time
-                time.sleep(1)
-    raise AKShareAdapterError(f"stock_news_em({symbol}) failed after 3 attempts: {last_err}")
+    """
+    Fetch all stock news from EastMoney search API.
+    Loops through all pages until the API returns empty results.
+    Safety cap at 50 pages (5000 items) to prevent infinite loops.
+    """
+    MAX_PAGES = 50
+    logger.info("[adapter] calling stock_news for %s (all pages)...", symbol)
+    t0 = time.time()
+
+    all_rows = []
+    url = "https://search-api-web.eastmoney.com/search/jsonp"
+    headers = {
+        "accept": "*/*",
+        "accept-encoding": "gzip, deflate, br, zstd",
+        "accept-language": "en,zh-CN;q=0.9,zh;q=0.8",
+        "cache-control": "no-cache",
+        "referer": f"https://so.eastmoney.com/news/s?keyword={symbol}",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+
+    page = 1
+    while page <= MAX_PAGES:
+        items = []
+        inner_param = {
+            "uid": "",
+            "keyword": symbol,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientType": "web",
+            "clientVersion": "curr",
+            "param": {
+                "cmsArticleWebOld": {
+                    "searchScope": "default",
+                    "sort": "default",
+                    "pageIndex": page,
+                    "pageSize": 100,
+                    "preTag": "<em>",
+                    "postTag": "</em>",
+                }
+            },
+        }
+        params = {
+            "cb": f"jQuery{int(time.time() * 1000)}",
+            "param": json.dumps(inner_param, ensure_ascii=False),
+            "_": str(int(time.time() * 1000)),
+        }
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                r = requests.get(url, params=params, headers=headers, timeout=30)
+                data_text = r.text
+                # Strip JSONP callback
+                if "(" in data_text:
+                    data_text = data_text[data_text.index("(") + 1 : data_text.rindex(")")]
+                data_json = json.loads(data_text)
+                items = data_json.get("result", {}).get("cmsArticleWebOld", [])
+                if not items:
+                    break  # No more results
+                for item in items:
+                    all_rows.append({
+                        "新闻标题": item.get("title", "").replace("<em>", "").replace("</em>", ""),
+                        "新闻内容": (item.get("content", "") or "").replace("<em>", "").replace("</em>", ""),
+                        "发布时间": item.get("date", ""),
+                        "文章来源": item.get("mediaName", ""),
+                        "新闻链接": f"http://finance.eastmoney.com/a/{item.get('code', '')}.html",
+                        "关键词": symbol,
+                    })
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(1)
+
+        if not items:
+            break
+        page += 1
+        # Small delay between pages to be polite to the API
+        if page > 1:
+            time.sleep(0.3)
+
+    if not all_rows:
+        raise AKShareAdapterError(f"stock_news({symbol}) returned empty after {page} pages")
+
+    df = pd.DataFrame(all_rows)
+    col_order = ["关键词", "新闻标题", "新闻内容", "发布时间", "文章来源", "新闻链接"]
+    df = df[col_order]
+    logger.info("[adapter] stock_news(%s) returned %d rows (%.2fs)", symbol, len(df), time.time() - t0)
+    return _validate_and_normalize_df(df, NEWS_COLUMNS, "stock_news")
 
 
 def fetch_financial_report(symbol: str, report_type: str) -> pd.DataFrame | None:

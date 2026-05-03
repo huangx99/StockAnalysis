@@ -71,8 +71,7 @@ function ScoreRing({ score, style }: { score: number; style: string }) {
       <span
         className="font-data-sm mt-1 px-2 py-0.5 rounded"
         style={{
-          backgroundColor: 'var(--accent-secondary)',
-          opacity: 0.15,
+          backgroundColor: 'var(--accent-secondary)26',
           color: 'var(--accent-secondary)',
         }}
       >

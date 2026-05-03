@@ -164,6 +164,18 @@ export interface DownloadStatus {
   logs: string[];
 }
 
+export interface SingleDownloadProgress {
+  status: 'idle' | 'running' | 'completed' | 'error';
+  symbol?: string;
+  name?: string;
+  dataTypes?: string[];
+  completedTypes?: { type: string; count: number }[];
+  currentIndex?: number;
+  logs?: string[];
+  startedAt?: string;
+  updatedAt?: string;
+}
+
 export interface StockDataSummary {
   symbol: string;
   name?: string;

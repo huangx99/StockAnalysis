@@ -21,6 +21,13 @@ _download_task: asyncio.Task | None = None
 _stop_flag = False
 _MAX_LOGS = 500
 
+DATA_TYPE_LABELS = {
+    "kline_day": "日K", "kline_week": "周K", "kline_month": "月K",
+    "financials": "财务", "news": "新闻", "dividends": "分红", "profile": "基本信息",
+}
+
+_single_download_state: dict | None = None
+
 
 def _append_log(logs: list[str], msg: str) -> None:
     entry = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
@@ -105,7 +112,16 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
         period_map = {"day": "daily", "week": "weekly", "month": "monthly"}
         ak_period = period_map.get(period, "daily")
 
-        df = await asyncio.to_thread(fetch_stock_hist, symbol, ak_period, "", "", "qfq")
+        # Incremental: if local data exists, only fetch from the last date
+        last_date = data_store.get_last_kline_date(symbol, period)
+        start_date = ""
+        if last_date:
+            start_date = last_date.replace("-", "")
+
+        df = await asyncio.to_thread(fetch_stock_hist, symbol, ak_period, start_date, "", "qfq")
+        if df is None or df.empty:
+            return 0
+
         closes = df["收盘"].tolist()
 
         def ma(n: int, idx: int):
@@ -113,9 +129,9 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
                 return None
             return round(sum(closes[idx - n + 1: idx + 1]) / n, 2)
 
-        result = []
+        fetched_rows = []
         for i, (_, row) in enumerate(df.iterrows()):
-            result.append({
+            fetched_rows.append({
                 "date": str(row["日期"]),
                 "open": float(row["开盘"]),
                 "high": float(row["最高"]),
@@ -128,8 +144,29 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
                 "ma60": ma(60, i),
             })
 
-        data_store.save_stock_data(symbol, f"kline_{period}", result)
-        return len(result)
+        if last_date and fetched_rows:
+            # Incremental merge: keep existing, append only truly new dates
+            existing = data_store.load_stock_data(symbol, f"kline_{period}") or []
+            existing_dates = {r["date"] for r in existing}
+            truly_new = [r for r in fetched_rows if r["date"] not in existing_dates]
+            if not truly_new:
+                # Already up to date
+                return len(existing)
+            merged = existing + truly_new
+            # Recalculate MAs for the last 60 rows (boundary may shift)
+            closes_all = [r["close"] for r in merged]
+            for j in range(max(0, len(merged) - 60), len(merged)):
+                for n in (5, 10, 20, 60):
+                    key = f"ma{n}"
+                    if j < n - 1:
+                        merged[j][key] = None
+                    else:
+                        merged[j][key] = round(sum(closes_all[j - n + 1: j + 1]) / n, 2)
+            data_store.save_stock_data(symbol, f"kline_{period}", merged)
+            return len(merged)
+        else:
+            data_store.save_stock_data(symbol, f"kline_{period}", fetched_rows)
+            return len(fetched_rows)
     except Exception as e:
         logger.error("[download] kline_%s %s failed: %s", period, symbol, e)
         return 0
@@ -261,6 +298,72 @@ async def _download_single(symbol: str, name: str, data_types: list[str], spot_d
     return stats
 
 
+async def _download_single_with_progress(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
+    global _single_download_state
+    logs: list[str] = []
+    _append_log(logs, f"开始下载 {symbol} {name}")
+
+    _single_download_state = {
+        "status": "running",
+        "symbol": symbol,
+        "name": name,
+        "dataTypes": data_types,
+        "completedTypes": [],
+        "currentIndex": 0,
+        "logs": logs,
+        "startedAt": datetime.now().isoformat(),
+        "updatedAt": datetime.now().isoformat(),
+    }
+
+    stats: dict[str, int] = {}
+    try:
+        for i, dt in enumerate(data_types):
+            _single_download_state["currentIndex"] = i
+            _single_download_state["updatedAt"] = datetime.now().isoformat()
+
+            if dt == "profile":
+                count = await _fetch_and_save_profile(symbol, name, spot_df)
+            elif dt == "kline_day":
+                count = await _fetch_and_save_kline(symbol, "day")
+            elif dt == "kline_week":
+                count = await _fetch_and_save_kline(symbol, "week")
+            elif dt == "kline_month":
+                count = await _fetch_and_save_kline(symbol, "month")
+            elif dt == "financials":
+                count = await _fetch_and_save_financials(symbol)
+            elif dt == "news":
+                count = await _fetch_and_save_news(symbol)
+            elif dt == "dividends":
+                count = await _fetch_and_save_dividends(symbol)
+            else:
+                count = 0
+
+            stats[dt] = count
+            _single_download_state["completedTypes"].append({"type": dt, "count": count})
+            label = DATA_TYPE_LABELS.get(dt, dt)
+            _append_log(logs, f"{label}: {count} 条 ✓" if count > 0 else f"{label}: 无数据")
+
+        _single_download_state["status"] = "completed"
+        _single_download_state["updatedAt"] = datetime.now().isoformat()
+    except Exception as e:
+        _single_download_state["status"] = "error"
+        _single_download_state["updatedAt"] = datetime.now().isoformat()
+        _append_log(logs, f"错误: {e}")
+        raise
+    finally:
+        # Clear state after a short delay so frontend can poll the final status
+        await asyncio.sleep(2)
+        _single_download_state = None
+
+    return stats
+
+
+def get_single_download_status() -> dict:
+    if _single_download_state is None:
+        return {"status": "idle"}
+    return _single_download_state
+
+
 async def _run_download(symbols: list[dict], data_types: list[str], resume_from: str | None = None):
     global _stop_flag
     _stop_flag = False
@@ -270,7 +373,6 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
     completed = state.get("completed", 0) if resume_from else 0
     failed: list[str] = state.get("failed", []) if resume_from else []
     logs: list[str] = state.get("logs", []) if resume_from else []
-    skipped = 0
 
     # If resuming, skip symbols until we pass the last completed one
     start_idx = 0
@@ -288,8 +390,9 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
         except Exception as e:
             logger.error("[download] failed to load spot data: %s", e)
 
-    logger.info("[download] starting: %d stocks, types=%s, resume_from=%s", total - start_idx, data_types, resume_from)
-    _append_log(logs, f"开始下载 {total - start_idx} 只股票")
+    remaining = total - start_idx
+    logger.info("[download] starting: %d stocks, types=%s, resume_from=%s", remaining, data_types, resume_from)
+    _append_log(logs, f"开始下载 {remaining} 只股票")
 
     def _save_state(status: str, last_symbol: str | None):
         data_store.save_download_state({
@@ -306,53 +409,45 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
 
     for i in range(start_idx, total):
         if _stop_flag:
-            _save_state("paused", symbols[i - 1]["code"] if i > 0 else None)
             _append_log(logs, f"已暂停 ({completed}/{total})")
+            _save_state("paused", symbols[i - 1]["code"] if i > 0 else None)
             logger.info("[download] paused at %s (%d/%d)", symbols[i]["code"], completed, total)
             return
 
         symbol = symbols[i]["code"]
         name = symbols[i]["name"]
 
-        # Check if already has data (skip for resume)
-        if not resume_from and data_store.has_stock_data(symbol, "profile"):
-            skipped += 1
-            completed += 1
-            continue
-
         try:
+            has_existing = data_store.has_stock_data(symbol, "profile")
             stats = await _download_single(symbol, name, data_types, spot_df)
             completed += 1
-            # Build summary: "日K:6000 财务:20 新闻:50"
+            # Build summary
             parts = []
-            label_map = {
-                "kline_day": "日K", "kline_week": "周K", "kline_month": "月K",
-                "financials": "财务", "news": "新闻", "dividends": "分红", "profile": "基本信息",
-            }
             for dt, count in stats.items():
                 if count > 0:
-                    parts.append(f"{label_map.get(dt, dt)}:{count}")
+                    parts.append(f"{DATA_TYPE_LABELS.get(dt, dt)}:{count}")
             summary = ", ".join(parts) if parts else "无数据"
-            _append_log(logs, f"{symbol} {name} — {summary} ✓")
+            tag = "更新" if has_existing else "下载"
+            _append_log(logs, f"[{completed}/{total}] {symbol} {name} — {tag} {summary} ✓")
             if completed % 50 == 0:
                 logger.info("[download] progress: %d/%d (%.1f%%)", completed, total, completed / total * 100)
         except Exception as e:
             logger.error("[download] %s failed: %s", symbol, e)
-            _append_log(logs, f"{symbol} {name} — 失败: {e}")
+            completed += 1
+            _append_log(logs, f"[{completed}/{total}] {symbol} {name} — 失败: {e}")
             if symbol not in failed:
                 failed.append(symbol)
 
-        # Save state every 10 stocks
-        if completed % 10 == 0:
-            _save_state("running", symbol)
+        # Save state after every stock so frontend gets real-time updates
+        _save_state("running", symbol)
 
         # Rate limit
         await asyncio.sleep(0.5)
 
     # Done
+    _append_log(logs, f"全部完成 {completed}/{total}，失败 {len(failed)}")
     _save_state("completed", symbols[-1]["code"] if symbols else None)
-    _append_log(logs, f"下载完成 {completed}/{total}，跳过 {skipped}，失败 {len(failed)}")
-    logger.info("[download] completed: %d/%d done, %d skipped, %d failed", completed, total, skipped, len(failed))
+    logger.info("[download] completed: %d/%d, %d failed", completed, total, len(failed))
 
 
 def get_download_status() -> dict:
@@ -369,6 +464,7 @@ def get_download_status() -> dict:
             "dataTypes": [],
             "logs": [],
         }
+    state.setdefault("logs", [])
     return state
 
 

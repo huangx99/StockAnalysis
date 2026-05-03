@@ -9,6 +9,7 @@ import type {
   AIReport,
   SystemStatus,
   DownloadStatus,
+  SingleDownloadProgress,
   DataStocksResponse,
   StockStats,
 } from '../../types';
@@ -154,6 +155,10 @@ export async function getDataStatus(): Promise<DownloadStatus> {
   return request(`${BASE}/system/data-status`);
 }
 
+export async function getSingleDownloadStatus(): Promise<SingleDownloadProgress> {
+  return request(`${BASE}/system/data/single-status`);
+}
+
 export async function getDataStocks(
   page = 1,
   pageSize = 50,
@@ -168,6 +173,10 @@ export async function startDataDownload(): Promise<{ status: string; total?: num
 
 export async function stopDataDownload(): Promise<{ status: string }> {
   return request(`${BASE}/system/data-stop`, { method: 'POST' });
+}
+
+export async function resetDataStatus(): Promise<{ status: string }> {
+  return request(`${BASE}/system/data-reset`, { method: 'POST' });
 }
 
 export async function refreshStockData(symbol: string): Promise<{ status: string; message: string }> {

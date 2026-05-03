@@ -122,7 +122,7 @@ export default function Navbar({ showMenuButton, onMenuClick }: NavbarProps) {
                       <span className="font-body text-sm" style={{ color: 'var(--text-secondary)' }}>{r.name}</span>
                       <span
                         className="ml-auto text-[11px] font-medium px-1.5 py-0.5 rounded"
-                        style={{ backgroundColor: 'var(--accent-primary)', opacity: 0.15, color: 'var(--accent-primary)' }}
+                        style={{ backgroundColor: 'var(--accent-primary)26', color: 'var(--accent-primary)' }}
                       >
                         {r.market}
                       </span>
@@ -219,7 +219,7 @@ export default function Navbar({ showMenuButton, onMenuClick }: NavbarProps) {
                   <span className="font-body" style={{ color: 'var(--text-secondary)' }}>{r.name}</span>
                   <span
                     className="ml-auto text-[11px] font-medium px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: 'var(--accent-primary)', opacity: 0.15, color: 'var(--accent-primary)' }}
+                    style={{ backgroundColor: 'var(--accent-primary)26', color: 'var(--accent-primary)' }}
                   >
                     {r.market}
                   </span>

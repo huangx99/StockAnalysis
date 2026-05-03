@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, ArrowDownRight } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { KLineData, FinancialStatement, DividendRecord, StockDocument, MarketStats, TechnicalIndicators } from '@/types'
 import FinancialTable from '@/components/financial/FinancialTable'
 import FinancialTrendChart from '@/components/financial/FinancialTrendChart'
@@ -79,7 +79,7 @@ function MarketAnalysisTab({ stats, indicators, loading }: { stats: MarketStats 
               className="flex flex-col gap-1 px-4 py-3 rounded-lg border border-border-subtle min-w-[140px]"
               style={{ backgroundColor: 'var(--bg-base)' }}
             >
-              <span className="font-label" style={{ color: 'var(--text-muted)' }}>{item.label}</span>
+              <span className="font-label" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
               <div className="flex items-center gap-1">
                 {isUp ? (
                   <ArrowUpRight className="w-3.5 h-3.5" style={{ color: 'var(--up-red)' }} />
@@ -124,8 +124,7 @@ function MarketAnalysisTab({ stats, indicators, loading }: { stats: MarketStats 
                       <span
                         className="font-label px-2 py-0.5 rounded"
                         style={{
-                          backgroundColor: row.signalType === 'up' ? 'var(--up-red)' : row.signalType === 'down' ? 'var(--down-green)' : 'var(--warning)',
-                          opacity: 0.15,
+                          backgroundColor: row.signalType === 'up' ? 'var(--up-red)26' : row.signalType === 'down' ? 'var(--down-green)26' : 'var(--warning)26',
                           color: row.signalType === 'up' ? 'var(--up-red)' : row.signalType === 'down' ? 'var(--down-green)' : 'var(--warning)',
                         }}
                       >
@@ -173,6 +172,45 @@ function FinancialAnalysisTab({ data, dividends, loading }: { data: FinancialSta
 }
 
 function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean }) {
+  const PAGE_SIZE = 20
+  const [docFilter, setDocFilter] = useState('全部')
+  const [dateFilter, setDateFilter] = useState('全部')
+  const [page, setPage] = useState(1)
+
+  const filtered = useMemo(() => {
+    let result = docs
+
+    if (docFilter !== '全部') {
+      const typeMap: Record<string, string> = { '公告': 'announcement', '新闻': 'news', '研报': 'report' }
+      result = result.filter(d => d.type === typeMap[docFilter])
+    }
+
+    if (dateFilter !== '全部') {
+      const daysMap: Record<string, number> = { '近7日': 7, '近30日': 30, '近90日': 90 }
+      const days = daysMap[dateFilter]
+      if (days) {
+        const cutoff = new Date()
+        cutoff.setHours(0, 0, 0, 0)
+        cutoff.setDate(cutoff.getDate() - days)
+        result = result.filter(doc => {
+          const pub = new Date(doc.publishTime)
+          return !isNaN(pub.getTime()) && pub >= cutoff
+        })
+      }
+    }
+
+    return result
+  }, [docs, docFilter, dateFilter])
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(1)
+  }, [docFilter, dateFilter])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const countLabel = filtered.length !== docs.length ? ` (${filtered.length}/${docs.length})` : ` (${docs.length})`
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -185,31 +223,66 @@ function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean })
     <div className="py-2">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        {['全部', '公告', '新闻', '研报'].map((f) => (
-          <button
-            key={f}
-            className="px-3 py-1 rounded-md text-sm font-medium transition-all"
-            style={{
-              backgroundColor: f === '全部' ? 'var(--accent-primary)' : 'transparent',
-              color: f === '全部' ? '#fff' : 'var(--text-secondary)',
-            }}
-          >
-            {f}
-          </button>
-        ))}
+        <div className="flex items-center gap-1">
+          {['全部', '公告', '新闻', '研报'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setDocFilter(f)}
+              className="px-3 py-1 rounded-md text-sm font-medium transition-all"
+              style={{
+                backgroundColor: docFilter === f ? 'var(--accent-primary)' : 'transparent',
+                color: docFilter === f ? '#fff' : 'var(--text-secondary)',
+              }}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{countLabel}</span>
         <div className="ml-auto flex items-center gap-1">
           {['近7日', '近30日', '近90日', '全部'].map((d) => (
             <button
               key={d}
-              className="px-2 py-1 rounded text-xs font-medium transition-colors hover:text-text-primary"
-              style={{ color: 'var(--text-muted)' }}
+              onClick={() => setDateFilter(d)}
+              className="px-2 py-1 rounded text-xs font-medium transition-all"
+              style={{
+                backgroundColor: dateFilter === d ? 'var(--accent-primary)' : 'transparent',
+                color: dateFilter === d ? '#fff' : 'var(--text-muted)',
+              }}
             >
               {d}
             </button>
           ))}
         </div>
       </div>
-      <NewsTimeline docs={docs} />
+      <NewsTimeline docs={paged} />
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-6 pt-4 border-t border-border-subtle">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-all disabled:opacity-30"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <ChevronLeft className="w-4 h-4" />
+            上一页
+          </button>
+          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            第 {page}/{totalPages} 页
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-all disabled:opacity-30"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            下一页
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

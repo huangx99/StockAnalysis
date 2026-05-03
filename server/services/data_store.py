@@ -101,6 +101,17 @@ def list_stock_symbols_with_data() -> list[str]:
     return [d.name for d in sorted(DATA_DIR.iterdir()) if d.is_dir()]
 
 
+def get_last_kline_date(symbol: str, period: str = "day") -> str | None:
+    """Return the last date string from local kline data, or None if no data."""
+    data = load_stock_data(symbol, f"kline_{period}")
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    try:
+        return data[-1].get("date")
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 def save_download_state(state: dict) -> None:
     DOWNLOAD_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(DOWNLOAD_STATE_FILE, "w", encoding="utf-8") as f:

@@ -61,6 +61,27 @@ async def data_status():
     return batch_downloader.get_download_status()
 
 
+@router.get("/system/data/single-status")
+async def single_download_status():
+    return batch_downloader.get_single_download_status()
+
+
+@router.post("/system/data-reset")
+async def data_reset():
+    data_store.save_download_state({
+        "status": "idle",
+        "total": 0,
+        "completed": 0,
+        "failed": [],
+        "lastSymbol": None,
+        "startedAt": None,
+        "updatedAt": None,
+        "dataTypes": [],
+        "logs": [],
+    })
+    return {"status": "ok"}
+
+
 @router.get("/system/data-stocks")
 async def data_stocks(
     page: int = Query(1, ge=1),
@@ -133,8 +154,8 @@ async def download_stock(symbol: str):
         except Exception:
             pass
     try:
-        await batch_downloader._download_single(symbol, name, list(data_store.DATA_TYPES))
-        return {"status": "ok", "symbol": symbol, "name": name}
+        stats = await batch_downloader._download_single_with_progress(symbol, name, list(data_store.DATA_TYPES))
+        return {"status": "ok", "symbol": symbol, "name": name, "stats": stats}
     except Exception as e:
         return {"status": "error", "symbol": symbol, "message": str(e)}
 
