@@ -39,3 +39,8 @@ class AIProvider(ABC):
         news_data: list[dict],
     ) -> AIReport:
         ...
+
+    @abstractmethod
+    async def analyze_news_item(self, title: str, content: str) -> dict:
+        """Analyze a single news article. Returns {sentiment, summary, key_points, risk_factors}."""
+        ...

@@ -2,12 +2,19 @@ import json
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from models.ai import AIAnalysis, AIReport, AIReportSection
 from services import stock_service, ai_service
 from services.ai_service import AIConfigError
 
 router = APIRouter(prefix="/api", tags=["ai"])
+
+
+class NewsAnalyzeRequest(BaseModel):
+    title: str
+    content: str
+    url: str = ""
 
 
 def _ai_not_configured_analysis(symbol: str, stock_name: str) -> AIAnalysis:
@@ -105,3 +112,26 @@ async def report(symbol: str):
         financials_data=[f.model_dump() for f in financials],
         news_data=[n.model_dump() for n in news],
     )
+
+
+@router.post("/stock/{symbol}/news/analyze")
+async def analyze_news_item(symbol: str, body: NewsAnalyzeRequest):
+    try:
+        provider = ai_service.get_ai_provider()
+    except AIConfigError:
+        return {
+            "sentiment": "neutral",
+            "summary": "AI 服务未配置",
+            "key_points": [],
+            "risk_factors": ["请在设置页面配置 AI 服务后重试"],
+        }
+
+    content = body.content
+    # If content is empty and URL is a notice/report, download and extract text
+    if not content and body.url:
+        from services.stock_service import get_notice_content
+        downloaded = await get_notice_content(body.url)
+        if downloaded:
+            content = downloaded
+
+    return await provider.analyze_news_item(body.title, content)

@@ -12,6 +12,8 @@ from adapters.akshare_adapter import (
     fetch_stock_news,
     fetch_financial_report,
     fetch_dividend_data,
+    fetch_stock_notices,
+    fetch_stock_reports,
 )
 from services import data_store
 
@@ -24,6 +26,7 @@ _MAX_LOGS = 500
 DATA_TYPE_LABELS = {
     "kline_day": "日K", "kline_week": "周K", "kline_month": "月K",
     "financials": "财务", "news": "新闻", "dividends": "分红", "profile": "基本信息",
+    "notices": "公告", "reports": "研报",
 }
 
 _single_download_state: dict | None = None
@@ -227,12 +230,13 @@ async def _fetch_and_save_news(symbol: str) -> int:
                 doc_type = "report"
 
             results.append({
-                "id": str(i),
+                "id": f"news_{i}",
                 "title": title,
                 "type": doc_type,
                 "publishTime": pub_time,
                 "source": source,
                 "summary": content[:200] if content else title,
+                "content": content or "",
                 "sentiment": sentiment,
                 "risks": [],
                 "url": url,
@@ -277,6 +281,69 @@ async def _fetch_and_save_dividends(symbol: str) -> int:
         return 0
 
 
+async def _fetch_and_save_notices(symbol: str) -> int:
+    try:
+        df = await asyncio.to_thread(fetch_stock_notices, symbol)
+        if df is None or df.empty:
+            data_store.save_stock_data(symbol, "notices", [])
+            return 0
+
+        results = []
+        for _, row in df.iterrows():
+            url = str(row.get("公告链接", "")) or None
+            if url:
+                if " " in url:
+                    url = url.replace(" ", "%20")
+                if url.startswith("http://"):
+                    url = url.replace("http://", "https://", 1)
+            results.append({
+                "title": str(row.get("公告标题", "")),
+                "publishTime": str(row.get("公告时间", "")),
+                "url": url,
+                "code": str(row.get("代码", symbol)),
+                "name": str(row.get("简称", "")),
+            })
+        results.sort(key=lambda x: x["publishTime"], reverse=True)
+        data_store.save_stock_data(symbol, "notices", results)
+        return len(results)
+    except Exception as e:
+        logger.error("[download] notices %s failed: %s", symbol, e)
+        return 0
+
+
+async def _fetch_and_save_reports(symbol: str) -> int:
+    try:
+        df = await asyncio.to_thread(fetch_stock_reports, symbol)
+        if df is None or df.empty:
+            data_store.save_stock_data(symbol, "reports", [])
+            return 0
+
+        results = []
+        for _, row in df.iterrows():
+            url = str(row.get("报告PDF链接", "")) or None
+            if url:
+                if " " in url:
+                    url = url.replace(" ", "%20")
+                if url.startswith("http://"):
+                    url = url.replace("http://", "https://", 1)
+            results.append({
+                "title": str(row.get("报告名称", "")),
+                "publishTime": str(row.get("日期", "")),
+                "url": url,
+                "code": str(row.get("股票代码", symbol)),
+                "name": str(row.get("股票简称", "")),
+                "rating": str(row.get("东财评级", "")),
+                "institution": str(row.get("机构", "")),
+                "industry": str(row.get("行业", "")),
+            })
+        results.sort(key=lambda x: x["publishTime"], reverse=True)
+        data_store.save_stock_data(symbol, "reports", results)
+        return len(results)
+    except Exception as e:
+        logger.error("[download] reports %s failed: %s", symbol, e)
+        return 0
+
+
 async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
     """Download all requested data types for a single stock. Returns {data_type: row_count}."""
     stats: dict[str, int] = {}
@@ -295,6 +362,10 @@ async def _download_single(symbol: str, name: str, data_types: list[str], spot_d
             stats[dt] = await _fetch_and_save_news(symbol)
         elif dt == "dividends":
             stats[dt] = await _fetch_and_save_dividends(symbol)
+        elif dt == "notices":
+            stats[dt] = await _fetch_and_save_notices(symbol)
+        elif dt == "reports":
+            stats[dt] = await _fetch_and_save_reports(symbol)
     return stats
 
 
@@ -335,6 +406,10 @@ async def _download_single_with_progress(symbol: str, name: str, data_types: lis
                 count = await _fetch_and_save_news(symbol)
             elif dt == "dividends":
                 count = await _fetch_and_save_dividends(symbol)
+            elif dt == "notices":
+                count = await _fetch_and_save_notices(symbol)
+            elif dt == "reports":
+                count = await _fetch_and_save_reports(symbol)
             else:
                 count = 0
 

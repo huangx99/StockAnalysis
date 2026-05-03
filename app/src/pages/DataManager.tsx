@@ -36,6 +36,9 @@ const DATA_TYPE_LABELS: Record<string, string> = {
   kline_month: '月K线',
   financials: '财务数据',
   news: '新闻公告',
+  dividends: '分红',
+  notices: '公告',
+  reports: '研报',
 }
 
 interface QueueItem {

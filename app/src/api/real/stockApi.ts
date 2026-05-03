@@ -12,6 +12,7 @@ import type {
   SingleDownloadProgress,
   DataStocksResponse,
   StockStats,
+  NewsAnalysis,
 } from '../../types';
 
 const BASE = '/api';
@@ -200,6 +201,23 @@ export async function deleteStockData(symbol: string): Promise<{ status: string;
 
 export async function getIndustries(): Promise<{ items: { name: string; code: string; count: number }[] }> {
   return request(`${BASE}/system/industries`);
+}
+
+export async function refreshNews(symbol: string): Promise<{ new_count: number; total: number }> {
+  return request(`${BASE}/stock/${symbol}/news/refresh`, { method: 'POST' });
+}
+
+export async function analyzeNewsItem(
+  symbol: string,
+  title: string,
+  content: string,
+  url: string = '',
+): Promise<NewsAnalysis> {
+  return request(`${BASE}/stock/${symbol}/news/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, content, url }),
+  });
 }
 
 export async function getIndustryStocks(industry: string): Promise<{ industry: string; items: { code: string; name: string }[] }> {

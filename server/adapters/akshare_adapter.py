@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime
 
 import akshare as ak
 import pandas as pd
@@ -15,6 +16,8 @@ from .column_schemas import (
     FINANCIAL_BALANCE_COLUMNS,
     FINANCIAL_CASHFLOW_COLUMNS,
     DIVIDEND_COLUMNS,
+    NOTICE_COLUMNS,
+    REPORT_COLUMNS,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,7 +113,7 @@ def fetch_stock_news(symbol: str) -> pd.DataFrame:
     Loops through all pages until the API returns empty results.
     Safety cap at 50 pages (5000 items) to prevent infinite loops.
     """
-    MAX_PAGES = 50
+    MAX_PAGES = 200
     logger.info("[adapter] calling stock_news for %s (all pages)...", symbol)
     t0 = time.time()
 
@@ -244,4 +247,50 @@ def fetch_dividend_data(symbol: str) -> pd.DataFrame | None:
         raise
     except Exception as e:
         logger.warning("stock_fhps_em(%s) failed: %s", symbol, e)
+        return None
+
+
+def fetch_stock_notices(symbol: str) -> pd.DataFrame | None:
+    """Fetch company announcements via stock_zh_a_disclosure_report_cninfo (cninfo)."""
+    try:
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = "20200101"  # Fetch all available since 2020
+        logger.info("[adapter] calling stock_zh_a_disclosure_report_cninfo(%s, %s, %s)...",
+                    symbol, start_date, end_date)
+        t0 = time.time()
+        df = ak.stock_zh_a_disclosure_report_cninfo(
+            symbol=symbol,
+            market="沪深京",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df is None or df.empty:
+            logger.info("[adapter] stock_zh_a_disclosure_report_cninfo(%s) returned empty", symbol)
+            return None
+        logger.info("[adapter] stock_zh_a_disclosure_report_cninfo(%s) returned %d rows in %.2fs",
+                    symbol, len(df), time.time() - t0)
+        return _validate_and_normalize_df(df, NOTICE_COLUMNS, f"stock_zh_a_disclosure_report_cninfo({symbol})")
+    except ColumnValidationError:
+        raise
+    except Exception as e:
+        logger.warning("stock_zh_a_disclosure_report_cninfo(%s) failed: %s", symbol, e)
+        return None
+
+
+def fetch_stock_reports(symbol: str) -> pd.DataFrame | None:
+    """Fetch research reports via stock_research_report_em."""
+    try:
+        logger.info("[adapter] calling stock_research_report_em(%s)...", symbol)
+        t0 = time.time()
+        df = ak.stock_research_report_em(symbol=symbol)
+        if df is None or df.empty:
+            logger.info("[adapter] stock_research_report_em(%s) returned empty", symbol)
+            return None
+        logger.info("[adapter] stock_research_report_em(%s) returned %d rows in %.2fs",
+                    symbol, len(df), time.time() - t0)
+        return _validate_and_normalize_df(df, REPORT_COLUMNS, f"stock_research_report_em({symbol})")
+    except ColumnValidationError:
+        raise
+    except Exception as e:
+        logger.warning("stock_research_report_em(%s) failed: %s", symbol, e)
         return None

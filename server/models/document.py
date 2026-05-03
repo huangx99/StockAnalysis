@@ -9,6 +9,7 @@ class StockDocument(BaseModel):
     publishTime: str
     source: str
     summary: str
+    content: str = ""
     sentiment: Literal["positive", "neutral", "negative"]
     risks: list[str]
     url: str | None = None

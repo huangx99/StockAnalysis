@@ -36,6 +36,16 @@ Generate a structured report with 5-7 sections. Return valid JSON:
 }
 Respond in Chinese. Use actual numbers from the provided data."""
 
+NEWS_ANALYSIS_SYSTEM = """You are a financial news analyst for A-share stocks.
+Analyze the given news article and return valid JSON:
+{
+  "sentiment": "positive | neutral | negative",
+  "summary": "string — 1-2 sentence summary in Chinese",
+  "key_points": ["key point 1", "key point 2", ...],
+  "risk_factors": ["risk factor 1", ...]
+}
+Be concise. key_points should be 2-4 items. risk_factors can be empty if no risks."""
+
 
 class CustomProvider(AIProvider):
     """Generic OpenAI-compatible provider for local LLMs (Ollama, vLLM, etc.)."""
@@ -148,6 +158,32 @@ class CustomProvider(AIProvider):
             )
             for field_name, value in result.model_dump().items():
                 yield field_name, value
+
+    async def analyze_news_item(self, title: str, content: str) -> dict:
+        user_msg = f"Title: {title}\n\nContent: {content}"
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": NEWS_ANALYSIS_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_tokens=1024,
+            )
+            content_text = response.choices[0].message.content
+            if "```json" in content_text:
+                content_text = content_text.split("```json")[1].split("```")[0]
+            elif "```" in content_text:
+                content_text = content_text.split("```")[1].split("```")[0]
+            return json.loads(content_text.strip())
+        except Exception as e:
+            logger.error("Custom provider analyze_news_item failed: %s", e)
+            return {
+                "sentiment": "neutral",
+                "summary": "AI analysis unavailable",
+                "key_points": [],
+                "risk_factors": [],
+            }
 
     async def report(
         self, symbol, stock_name, profile_data, financials_data, news_data

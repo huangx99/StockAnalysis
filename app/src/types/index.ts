@@ -132,9 +132,17 @@ export interface StockDocument {
   publishTime: string;
   source: string;
   summary: string;
+  content: string;
   sentiment: 'positive' | 'neutral' | 'negative';
   risks: string[];
   url?: string;
+}
+
+export interface NewsAnalysis {
+  sentiment: 'positive' | 'neutral' | 'negative';
+  summary: string;
+  key_points: string[];
+  risk_factors: string[];
 }
 
 export interface AIReport {

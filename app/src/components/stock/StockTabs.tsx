@@ -1,14 +1,16 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight } from 'lucide-react'
-import type { KLineData, FinancialStatement, DividendRecord, StockDocument, MarketStats, TechnicalIndicators } from '@/types'
+import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight, RotateCw, Search, Calendar } from 'lucide-react'
+import type { KLineData, FinancialStatement, DividendRecord, StockDocument, MarketStats, TechnicalIndicators, NewsAnalysis } from '@/types'
 import FinancialTable from '@/components/financial/FinancialTable'
 import FinancialTrendChart from '@/components/financial/FinancialTrendChart'
 import DividendTable from '@/components/financial/DividendTable'
 import NewsTimeline from '@/components/news/NewsTimeline'
 import MetricTooltip from '@/components/common/MetricTooltip'
+import { refreshNews } from '@/api/real/stockApi'
 
 interface StockTabsProps {
+  symbol: string
   klineData: KLineData[]
   financials: FinancialStatement[]
   dividends: DividendRecord[]
@@ -171,45 +173,133 @@ function FinancialAnalysisTab({ data, dividends, loading }: { data: FinancialSta
   )
 }
 
-function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean }) {
+function NewsTab({ docs, loading, symbol, savedAnalysisMap, onAnalysisDone }: {
+  docs: StockDocument[]
+  loading: boolean
+  symbol: string
+  savedAnalysisMap: Record<string, NewsAnalysis>
+  onAnalysisDone: (docId: string, analysis: NewsAnalysis) => void
+}) {
   const PAGE_SIZE = 20
   const [docFilter, setDocFilter] = useState('全部')
-  const [dateFilter, setDateFilter] = useState('全部')
   const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshMsg, setRefreshMsg] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [activePreset, setActivePreset] = useState('')
+  const listTopRef = useRef<HTMLDivElement>(null)
+
+  // Initialize date pickers from data bounds
+  useEffect(() => {
+    if (docs.length > 0) {
+      const dates = docs.map(d => d.publishTime.split(' ')[0]).filter(Boolean).sort()
+      if (dates.length > 0) {
+        setEndDate(dates[dates.length - 1])
+        // Default to last 90 days
+        const d = new Date(dates[dates.length - 1])
+        d.setDate(d.getDate() - 90)
+        const ninetyDaysAgo = d.toISOString().split('T')[0]
+        setStartDate(ninetyDaysAgo < dates[0] ? dates[0] : ninetyDaysAgo)
+        setActivePreset('近90日')
+      }
+    }
+  }, [docs])
+
+  const sortedDocs = useMemo(() => {
+    // Defensive sort: newest first (backend should already sort, but ensure it)
+    return [...docs].sort((a, b) => b.publishTime.localeCompare(a.publishTime))
+  }, [docs])
 
   const filtered = useMemo(() => {
-    let result = docs
+    let result = sortedDocs
 
     if (docFilter !== '全部') {
       const typeMap: Record<string, string> = { '公告': 'announcement', '新闻': 'news', '研报': 'report' }
       result = result.filter(d => d.type === typeMap[docFilter])
     }
 
-    if (dateFilter !== '全部') {
-      const daysMap: Record<string, number> = { '近7日': 7, '近30日': 30, '近90日': 90 }
-      const days = daysMap[dateFilter]
-      if (days) {
-        const cutoff = new Date()
-        cutoff.setHours(0, 0, 0, 0)
-        cutoff.setDate(cutoff.getDate() - days)
-        result = result.filter(doc => {
-          const pub = new Date(doc.publishTime)
-          return !isNaN(pub.getTime()) && pub >= cutoff
-        })
-      }
+    // Date range filter (uses startDate/endDate only)
+    if (startDate && endDate) {
+      result = result.filter(doc => {
+        const docDate = doc.publishTime.split(' ')[0]
+        return docDate >= startDate && docDate <= endDate
+      })
+    } else if (startDate) {
+      result = result.filter(doc => {
+        const docDate = doc.publishTime.split(' ')[0]
+        return docDate >= startDate
+      })
+    } else if (endDate) {
+      result = result.filter(doc => {
+        const docDate = doc.publishTime.split(' ')[0]
+        return docDate <= endDate
+      })
+    }
+
+    // Text search
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      result = result.filter(d =>
+        d.title.toLowerCase().includes(q) ||
+        d.summary.toLowerCase().includes(q)
+      )
     }
 
     return result
-  }, [docs, docFilter, dateFilter])
+  }, [sortedDocs, docFilter, startDate, endDate, search])
 
-  // Reset page when filter changes
+  // Reset page when filters/search change
   useEffect(() => {
     setPage(1)
-  }, [docFilter, dateFilter])
+  }, [docFilter, startDate, endDate, search])
+
+  // Scroll to top on page change
+  const handlePageChange = useCallback((newPage: number) => {
+    setPage(newPage)
+    listTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
   const countLabel = filtered.length !== docs.length ? ` (${filtered.length}/${docs.length})` : ` (${docs.length})`
+
+  const toDateStr = (d: Date) => d.toISOString().split('T')[0]
+
+  const applyPreset = (days: number, label: string) => {
+    const dates = docs.map(d => d.publishTime.split(' ')[0]).filter(Boolean).sort()
+    if (dates.length === 0) return
+    const lastDate = dates[dates.length - 1]
+    const firstDate = dates[0]
+    const d = new Date(lastDate)
+    d.setDate(d.getDate() - days)
+    const start = toDateStr(d)
+    setStartDate(start < firstDate ? firstDate : start)
+    setEndDate(lastDate)
+    setActivePreset(label)
+  }
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    setRefreshMsg('')
+    try {
+      const res = await refreshNews(symbol)
+      const newCount = res.new_count ?? 0
+      setRefreshMsg(newCount > 0 ? `新增 ${newCount} 条` : '已是最新')
+    } catch {
+      setRefreshMsg('更新失败')
+    } finally {
+      setRefreshing(false)
+      setTimeout(() => setRefreshMsg(''), 3000)
+    }
+  }
+
+  const handleClearDate = () => {
+    setStartDate('')
+    setEndDate('')
+    setActivePreset('')
+  }
 
   if (loading) {
     return (
@@ -222,13 +312,13 @@ function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean })
   return (
     <div className="py-2">
       {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-4">
         <div className="flex items-center gap-1">
           {['全部', '公告', '新闻', '研报'].map((f) => (
             <button
               key={f}
               onClick={() => setDocFilter(f)}
-              className="px-3 py-1 rounded-md text-sm font-medium transition-all"
+              className="px-2.5 py-1 rounded-md text-xs sm:text-sm font-medium transition-all"
               style={{
                 backgroundColor: docFilter === f ? 'var(--accent-primary)' : 'transparent',
                 color: docFilter === f ? '#fff' : 'var(--text-secondary)',
@@ -238,30 +328,128 @@ function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean })
             </button>
           ))}
         </div>
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{countLabel}</span>
-        <div className="ml-auto flex items-center gap-1">
-          {['近7日', '近30日', '近90日', '全部'].map((d) => (
+
+        {/* Search input */}
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-border-subtle" style={{ backgroundColor: 'var(--bg-base)' }}>
+          <Search className="w-3 h-3 shrink-0" style={{ color: 'var(--text-muted)' }} />
+          <input
+            type="text"
+            placeholder="搜索新闻..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="text-xs outline-none w-24 sm:w-32 md:w-40"
+            style={{ backgroundColor: 'transparent', color: 'var(--text-primary)' }}
+          />
+          {search && (
             <button
-              key={d}
-              onClick={() => setDateFilter(d)}
-              className="px-2 py-1 rounded text-xs font-medium transition-all"
-              style={{
-                backgroundColor: dateFilter === d ? 'var(--accent-primary)' : 'transparent',
-                color: dateFilter === d ? '#fff' : 'var(--text-muted)',
-              }}
+              onClick={() => setSearch('')}
+              className="text-xs shrink-0"
+              style={{ color: 'var(--text-muted)' }}
             >
-              {d}
+              ✕
             </button>
-          ))}
+          )}
+        </div>
+
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{countLabel}</span>
+
+        {/* Right-side controls: wrap into a second row on mobile */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 md:ml-auto">
+          {/* Date pickers */}
+          <div className="flex items-center gap-1">
+            <Calendar className="w-3 h-3 shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => { setStartDate(e.target.value); setActivePreset('') }}
+              className="px-1 py-0.5 rounded text-xs border border-border-subtle outline-none"
+              style={{ backgroundColor: 'var(--bg-base)', color: 'var(--text-primary)', width: '104px' }}
+            />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>-</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => { setEndDate(e.target.value); setActivePreset('') }}
+              className="px-1 py-0.5 rounded text-xs border border-border-subtle outline-none"
+              style={{ backgroundColor: 'var(--bg-base)', color: 'var(--text-primary)', width: '104px' }}
+            />
+            {(startDate || endDate) && (
+              <button
+                onClick={handleClearDate}
+                className="text-xs px-1.5 py-0.5 rounded shrink-0"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}
+              >
+                清除
+              </button>
+            )}
+          </div>
+
+          {/* Date preset buttons */}
+          <div className="flex items-center gap-1">
+            {[
+              { label: '近7日', days: 7 },
+              { label: '近30日', days: 30 },
+              { label: '近90日', days: 90 },
+              { label: '全部', days: 0 },
+            ].map((p) => (
+              <button
+                key={p.label}
+                onClick={() => {
+                  if (p.days === 0) {
+                    handleClearDate()
+                  } else {
+                    applyPreset(p.days, p.label)
+                  }
+                }}
+                className="px-1.5 py-1 rounded text-xs font-medium transition-all"
+                style={{
+                  backgroundColor: activePreset === p.label ? 'var(--accent-primary)' : 'transparent',
+                  color: activePreset === p.label ? '#fff' : 'var(--text-muted)',
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Refresh button */}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-all shrink-0"
+            style={{
+              backgroundColor: 'var(--accent-secondary)15',
+              color: 'var(--accent-secondary)',
+              opacity: refreshing ? 0.6 : 1,
+            }}
+          >
+            <RotateCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+            更新
+          </button>
+          {refreshMsg && (
+            <span className="text-xs shrink-0" style={{ color: 'var(--accent-primary)' }}>{refreshMsg}</span>
+          )}
         </div>
       </div>
-      <NewsTimeline docs={paged} />
 
-      {/* Pagination */}
+      {/* News list top marker for scroll-to-top */}
+      <div ref={listTopRef} />
+
+      <NewsTimeline
+        docs={paged}
+        symbol={symbol}
+        savedAnalysisMap={savedAnalysisMap}
+        onAnalysisDone={onAnalysisDone}
+      />
+
+      {/* Sticky pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-4 mt-6 pt-4 border-t border-border-subtle">
+        <div
+          className="flex items-center justify-center gap-4 mt-6 pt-4 border-t border-border-subtle sticky bottom-0 py-3"
+          style={{ backgroundColor: 'var(--bg-surface)' }}
+        >
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => handlePageChange(Math.max(1, page - 1))}
             disabled={page === 1}
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-all disabled:opacity-30"
             style={{ color: 'var(--text-secondary)' }}
@@ -273,7 +461,7 @@ function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean })
             第 {page}/{totalPages} 页
           </span>
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => handlePageChange(Math.min(totalPages, page + 1))}
             disabled={page === totalPages}
             className="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-all disabled:opacity-30"
             style={{ color: 'var(--text-secondary)' }}
@@ -287,8 +475,28 @@ function NewsTab({ docs, loading }: { docs: StockDocument[]; loading: boolean })
   )
 }
 
-export default function StockTabs({ klineData: _klineData, financials, dividends, news, marketStats, technicalIndicators, loading }: StockTabsProps) {
+export default function StockTabs({ symbol, klineData: _klineData, financials, dividends, news, marketStats, technicalIndicators, loading }: StockTabsProps) {
   const [activeTab, setActiveTab] = useState<'market' | 'financial' | 'news'>('market')
+
+  // Persist AI news analyses in localStorage
+  const [savedAnalysisMap, setSavedAnalysisMap] = useState<Record<string, NewsAnalysis>>(() => {
+    try {
+      const stored = localStorage.getItem(`news_analysis_${symbol}`)
+      return stored ? JSON.parse(stored) : {}
+    } catch {
+      return {}
+    }
+  })
+
+  const handleAnalysisDone = useCallback((docId: string, analysis: NewsAnalysis) => {
+    setSavedAnalysisMap((prev) => {
+      const next = { ...prev, [docId]: analysis }
+      try {
+        localStorage.setItem(`news_analysis_${symbol}`, JSON.stringify(next))
+      } catch { /* ignore */ }
+      return next
+    })
+  }, [symbol])
 
   return (
     <motion.div
@@ -355,7 +563,13 @@ export default function StockTabs({ klineData: _klineData, financials, dividends
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              <NewsTab docs={news} loading={loading.news} />
+              <NewsTab
+                docs={news}
+                loading={loading.news}
+                symbol={symbol}
+                savedAnalysisMap={savedAnalysisMap}
+                onAnalysisDone={handleAnalysisDone}
+              />
             </motion.div>
           )}
         </AnimatePresence>

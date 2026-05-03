@@ -1,10 +1,14 @@
 import asyncio
+import hashlib
 import json
 import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from io import BytesIO
+from urllib.parse import urlparse, parse_qs, unquote
 
+import requests as http_requests
 from fastapi import HTTPException
 
 from adapters.akshare_adapter import (
@@ -445,19 +449,96 @@ async def get_financials(symbol: str) -> list[FinancialStatement]:
     return results
 
 
+def _load_notices_as_docs(symbol: str) -> list[StockDocument]:
+    """Load stored notices as StockDocument list."""
+    local = data_store.load_stock_data(symbol, "notices")
+    if not isinstance(local, list):
+        return []
+    docs = []
+    for i, item in enumerate(local):
+        url = item.get("url")
+        if url and isinstance(url, str):
+            if " " in url:
+                url = url.replace(" ", "%20")
+            if url.startswith("http://"):
+                url = url.replace("http://", "https://", 1)
+        docs.append(StockDocument(
+            id=f"notice_{i}",
+            title=str(item.get("title", "")),
+            type="announcement",
+            publishTime=str(item.get("publishTime", "")),
+            source="巨潮公告",
+            summary=str(item.get("title", ""))[:200],
+            content="",
+            sentiment="neutral",
+            risks=[],
+            url=url,
+        ))
+    return docs
+
+
+def _load_reports_as_docs(symbol: str) -> list[StockDocument]:
+    """Load stored reports as StockDocument list."""
+    local = data_store.load_stock_data(symbol, "reports")
+    if not isinstance(local, list):
+        return []
+    docs = []
+    for i, item in enumerate(local):
+        title = str(item.get("title", ""))
+        institution = str(item.get("institution", ""))
+        rating = str(item.get("rating", ""))
+        summary_parts = []
+        if institution:
+            summary_parts.append(f"机构: {institution}")
+        if rating:
+            summary_parts.append(f"评级: {rating}")
+        url = item.get("url")
+        if url and isinstance(url, str):
+            if " " in url:
+                url = url.replace(" ", "%20")
+            if url.startswith("http://"):
+                url = url.replace("http://", "https://", 1)
+        docs.append(StockDocument(
+            id=f"report_{i}",
+            title=title,
+            type="report",
+            publishTime=str(item.get("publishTime", "")),
+            source=institution or "券商研报",
+            summary="; ".join(summary_parts) if summary_parts else title[:200],
+            content="",
+            sentiment="positive" if "买入" in rating or "增持" in rating else "neutral",
+            risks=[],
+            url=url,
+        ))
+    return docs
+
+
+def _merge_all_docs(news_docs: list[StockDocument], symbol: str) -> list[StockDocument]:
+    """Merge news, notices, and reports into a single sorted list."""
+    notices = _load_notices_as_docs(symbol)
+    reports = _load_reports_as_docs(symbol)
+    all_docs = news_docs + notices + reports
+    all_docs.sort(key=lambda x: x.publishTime, reverse=True)
+    return all_docs
+
+
 async def get_news(symbol: str) -> list[StockDocument]:
     cache_key = f"news:{symbol}"
     if cache_key in news_cache:
-        logger.info("[news:%s] cache HIT → %d items", symbol, len(news_cache[cache_key]))
-        return news_cache[cache_key]
+        cached = news_cache[cache_key]
+        merged = _merge_all_docs(cached, symbol)
+        logger.info("[news:%s] cache HIT → %d items (news:%d, notices+reports merged)", symbol, len(merged), len(cached))
+        return merged
 
     # Try local data store first
     local = data_store.load_stock_data(symbol, "news")
     if local is not None:
         logger.info("[news:%s] local HIT → %d items", symbol, len(local))
         result = [StockDocument(**item) for item in local]
-        news_cache[cache_key] = result
-        return result
+        result.sort(key=lambda x: x.publishTime, reverse=True)
+        merged = _merge_all_docs(result, symbol)
+        news_cache[cache_key] = result  # cache base news only; merge happens on read
+        return merged
 
     logger.info("[news:%s] cache MISS — fetching...", symbol)
     t0 = time.time()
@@ -466,10 +547,10 @@ async def get_news(symbol: str) -> list[StockDocument]:
         df = await asyncio.to_thread(fetch_stock_news, symbol)
     except AKShareAdapterError as e:
         logger.warning("[news:%s] not available: %s", symbol, e)
-        return []
+        return _merge_all_docs([], symbol)
     except Exception as e:
         logger.warning("[news:%s] failed: %s", symbol, e)
-        return []
+        return _merge_all_docs([], symbol)
 
     results = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -488,31 +569,108 @@ async def get_news(symbol: str) -> list[StockDocument]:
         elif any(kw in text for kw in negative_kw):
             sentiment = "negative"
 
-        doc_type = "news"
-        if "公告" in source or "巨潮" in source:
-            doc_type = "announcement"
-        elif "研报" in source or "券商" in source:
-            doc_type = "report"
-
         results.append(
             StockDocument(
-                id=str(i),
+                id=f"news_{i}",
                 title=title,
-                type=doc_type,
+                type="news",
                 publishTime=pub_time,
                 source=source,
                 summary=content[:200] if content else title,
+                content=content or "",
                 sentiment=sentiment,
                 risks=[],
                 url=url,
             )
         )
 
+    # Sort by publishTime descending (newest first)
+    results.sort(key=lambda x: x.publishTime, reverse=True)
+
     elapsed = time.time() - t0
-    logger.info("[news:%s] %d items in %.2fs", symbol, len(results), elapsed)
+    logger.info("[news:%s] fetched %d news items in %.2fs", symbol, len(results), elapsed)
     news_cache[cache_key] = results
     data_store.save_stock_data(symbol, "news", [item.model_dump() for item in results])
-    return results
+    merged = _merge_all_docs(results, symbol)
+    return merged
+
+
+async def refresh_news(symbol: str) -> dict:
+    """Incrementally fetch latest news and merge with local data."""
+    # Load existing news
+    local = data_store.load_stock_data(symbol, "news")
+    existing: list[dict] = local if isinstance(local, list) else []
+
+    # Find newest publishTime in local data
+    last_stored_time = ""
+    for item in existing:
+        pt = item.get("publishTime", "")
+        if pt > last_stored_time:
+            last_stored_time = pt
+
+    # Fetch fresh news
+    logger.info("[news:%s] refreshing — last stored time=%s", symbol, last_stored_time)
+    try:
+        df = await asyncio.to_thread(fetch_stock_news, symbol)
+    except Exception as e:
+        logger.warning("[news:%s] refresh fetch failed: %s", symbol, e)
+        return {"new_count": 0, "total": len(existing)}
+
+    # Filter new items (publishTime > last_stored_time)
+    existing_titles = {(item.get("title", ""), item.get("publishTime", "")[:10]) for item in existing}
+    new_items = []
+    for _, row in df.iterrows():
+        pub_time = str(row.get("发布时间", ""))
+        title = str(row.get("新闻标题", ""))
+        content = str(row.get("新闻内容", ""))
+        # Only keep items newer than last stored
+        if pub_time > last_stored_time:
+            # Dedup: same title + same date
+            key = (title, pub_time[:10])
+            if key not in existing_titles:
+                existing_titles.add(key)
+                source = str(row.get("文章来源", ""))
+                url = str(row.get("新闻链接", "")) or None
+                sentiment = "neutral"
+                positive_kw = ["利好", "增长", "突破", "新高", "增持", "买入", "上调"]
+                negative_kw = ["利空", "下跌", "减持", "卖出", "风险", "下调", "亏损"]
+                text = title + content
+                if any(kw in text for kw in positive_kw):
+                    sentiment = "positive"
+                elif any(kw in text for kw in negative_kw):
+                    sentiment = "negative"
+                doc_type = "news"
+                if "公告" in source or "巨潮" in source:
+                    doc_type = "announcement"
+                elif "研报" in source or "券商" in source:
+                    doc_type = "report"
+
+                new_items.append({
+                    "id": f"news_{len(existing) + len(new_items)}",
+                    "title": title,
+                    "type": doc_type,
+                    "publishTime": pub_time,
+                    "source": source,
+                    "summary": content[:200] if content else title,
+                    "content": content or "",
+                    "sentiment": sentiment,
+                    "risks": [],
+                    "url": url,
+                })
+
+    if new_items:
+        # Merge, sort, save
+        merged = existing + new_items
+        merged.sort(key=lambda x: x.get("publishTime", ""), reverse=True)
+        data_store.save_stock_data(symbol, "news", merged)
+        # Update cache
+        cache_key = f"news:{symbol}"
+        news_cache[cache_key] = [StockDocument(**item) for item in merged]
+        logger.info("[news:%s] refresh: %d new, %d total", symbol, len(new_items), len(merged))
+    else:
+        logger.info("[news:%s] refresh: no new items", symbol)
+
+    return {"new_count": len(new_items), "total": len(existing) + len(new_items)}
 
 
 def _compute_market_stats(closes: list[float], profile: StockProfile | None = None) -> MarketStats:
@@ -685,6 +843,22 @@ def _compute_technical_indicators(kline: list[KLineData]) -> TechnicalIndicators
     )
 
 
+async def get_notices(symbol: str) -> list[dict]:
+    """Return stored announcement notices for a stock."""
+    local = data_store.load_stock_data(symbol, "notices")
+    if isinstance(local, list):
+        return local
+    return []
+
+
+async def get_reports(symbol: str) -> list[dict]:
+    """Return stored research reports for a stock."""
+    local = data_store.load_stock_data(symbol, "reports")
+    if isinstance(local, list):
+        return local
+    return []
+
+
 async def get_stock_stats(symbol: str) -> StockStats:
     """Compute market stats and technical indicators from kline data."""
     cache_key = f"stats:{symbol}"
@@ -753,3 +927,111 @@ async def get_dividends(symbol: str) -> list[DividendRecord]:
     financials_cache[cache_key] = results
     data_store.save_stock_data(symbol, "dividends", [item.model_dump() for item in results])
     return results
+
+
+def _extract_pdf_text(url: str) -> str:
+    """Download a PDF and extract its text content."""
+    try:
+        from PyPDF2 import PdfReader
+    except ImportError:
+        logger.warning("PyPDF2 not installed, cannot extract PDF text")
+        return ""
+
+    try:
+        resp = http_requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        }, timeout=30)
+        if resp.status_code != 200:
+            return ""
+        reader = PdfReader(BytesIO(resp.content))
+        text_parts = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t)
+        return "\n".join(text_parts)
+    except Exception as e:
+        logger.warning("Failed to extract PDF text from %s: %s", url, e)
+        return ""
+
+
+async def get_notice_content(url: str) -> str:
+    """
+    Get the full text content of a notice/report.
+    For cninfo URLs: calls their API to get the PDF, downloads and extracts text.
+    Caches extracted text to disk.
+    """
+    if not url:
+        return ""
+
+    # Check cache
+    cache_dir = Path(__file__).parent.parent / "data" / "notice_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_path = cache_dir / f"{url_hash}.txt"
+
+    if cache_path.exists():
+        try:
+            return cache_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    fetch_headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+
+    # Handle cninfo URLs: call their API, get PDF URL, download + extract text
+    if "cninfo.com.cn" in url and "announcementId" in url:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        announcement_id = (params.get("announcementId") or [None])[0]
+        announcement_time = (params.get("announcementTime") or [None])[0]
+        stock_code = (params.get("stockCode") or [None])[0]
+
+        if not announcement_id:
+            return ""
+
+        if announcement_time:
+            announcement_time = unquote(announcement_time)
+
+        def _fetch_cninfo_pdf():
+            is_szse = stock_code.startswith(("0", "3")) if stock_code else False
+            api_resp = http_requests.post(
+                "https://www.cninfo.com.cn/new/announcement/bulletin_detail",
+                data={
+                    "announceId": announcement_id,
+                    "flag": "true" if is_szse else "false",
+                    "announceTime": announcement_time or "",
+                },
+                headers=fetch_headers,
+                timeout=15,
+            )
+            api_data = api_resp.json()
+            file_url = api_data.get("fileUrl")
+            if not file_url:
+                adjunct = api_data.get("announcement", {}).get("adjunctUrl")
+                if adjunct:
+                    file_url = f"https://static.cninfo.com.cn/{adjunct}"
+            if not file_url:
+                return ""
+            if file_url.startswith("http://"):
+                file_url = file_url.replace("http://", "https://", 1)
+            return _extract_pdf_text(file_url)
+
+        try:
+            text = await asyncio.to_thread(_fetch_cninfo_pdf)
+            if text:
+                cache_path.write_text(text, encoding="utf-8")
+                return text
+        except Exception as e:
+            logger.warning("Failed to get notice content from %s: %s", url, e)
+
+    # Handle direct PDF URLs (e.g., dfcfw.com reports)
+    elif url.endswith(".pdf"):
+        try:
+            text = await asyncio.to_thread(_extract_pdf_text, url)
+            if text:
+                cache_path.write_text(text, encoding="utf-8")
+                return text
+        except Exception as e:
+            logger.warning("Failed to extract PDF text from %s: %s", url, e)
+
+    return ""

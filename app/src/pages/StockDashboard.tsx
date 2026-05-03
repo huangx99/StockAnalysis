@@ -286,6 +286,7 @@ export default function StockDashboard() {
         </div>
       ) : (
         <StockTabs
+          symbol={symbol!}
           klineData={klineData}
           financials={financials}
           dividends={dividends}

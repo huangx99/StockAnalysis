@@ -1,11 +1,14 @@
 import NewsSummaryCard from './NewsSummaryCard'
-import type { StockDocument } from '@/types'
+import type { StockDocument, NewsAnalysis } from '@/types'
 
 interface NewsTimelineProps {
   docs: StockDocument[]
+  symbol: string
+  savedAnalysisMap: Record<string, NewsAnalysis>
+  onAnalysisDone: (docId: string, analysis: NewsAnalysis) => void
 }
 
-export default function NewsTimeline({ docs }: NewsTimelineProps) {
+export default function NewsTimeline({ docs, symbol, savedAnalysisMap, onAnalysisDone }: NewsTimelineProps) {
   if (docs.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
@@ -20,7 +23,14 @@ export default function NewsTimeline({ docs }: NewsTimelineProps) {
   return (
     <div className="flex flex-col">
       {docs.map((doc, i) => (
-        <NewsSummaryCard key={doc.id} doc={doc} index={i} />
+        <NewsSummaryCard
+          key={doc.id}
+          doc={doc}
+          index={i}
+          symbol={symbol}
+          savedAnalysis={savedAnalysisMap[doc.id] || null}
+          onAnalysisDone={onAnalysisDone}
+        />
       ))}
     </div>
   )

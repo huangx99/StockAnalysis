@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent / "data" / "stocks"
 DOWNLOAD_STATE_FILE = Path(__file__).parent.parent / "data" / "download_state.json"
 
-DATA_TYPES = ["profile", "kline_day", "kline_week", "kline_month", "financials", "news", "dividends"]
+DATA_TYPES = [
+    "profile", "kline_day", "kline_week", "kline_month",
+    "financials", "news", "dividends", "notices", "reports",
+]
 
 
 def _stock_dir(symbol: str) -> Path:
