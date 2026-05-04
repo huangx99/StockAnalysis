@@ -8,14 +8,17 @@ import StockKLineChart from '@/components/stock/StockKLineChart'
 import StockTabs from '@/components/stock/StockTabs'
 import AIInsightPanel from '@/components/ai/AIInsightPanel'
 import ErrorState from '@/components/common/ErrorState'
-import type { StockProfile, KLineData, FinancialStatement, DividendRecord, StockDocument, AIAnalysis, StockStats } from '@/types'
+import type { StockProfile, KLineData, FinancialStatement, FinancialPeriodMetrics, DividendRecord, StockDocument, AIAnalysis, StockStats, FinancialSummary } from '@/types'
 import {
   getStockProfile,
   getKLineData,
   getFinancials,
+  getFinancialPeriods,
+  getFinancialSummary,
   getNews,
   getStockStats,
   getDividends,
+  getSavedAIAnalysis,
   streamAIAnalysis,
 } from '@/api/real/stockApi'
 
@@ -91,6 +94,8 @@ export default function StockDashboard() {
   const [profile, setProfile] = useState<StockProfile | null>(null)
   const [klineData, setKlineData] = useState<KLineData[]>([])
   const [financials, setFinancials] = useState<FinancialStatement[]>([])
+  const [financialPeriods, setFinancialPeriods] = useState<FinancialPeriodMetrics[]>([])
+  const [financialSummary, setFinancialSummary] = useState<FinancialSummary | null>(null)
   const [dividends, setDividends] = useState<DividendRecord[]>([])
   const [news, setNews] = useState<StockDocument[]>([])
   const [aiAnalysis, setAiAnalysis] = useState<Partial<AIAnalysis> | null>(null)
@@ -102,7 +107,7 @@ export default function StockDashboard() {
     financials: true,
     news: true,
     stats: true,
-    ai: true,
+    ai: false,
   })
 
   const [error, setError] = useState<string | null>(null)
@@ -111,56 +116,48 @@ export default function StockDashboard() {
   const [klineLimit, setKlineLimit] = useState(250)
   const [aiStreaming, setAiStreaming] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [aiError, setAiError] = useState('')
 
   const isValidSymbol = symbol && /^\d{6}$/.test(symbol)
 
   const fetchAll = useCallback(async () => {
     if (!isValidSymbol) return
     setError(null)
-    setLoading({ profile: true, kline: true, financials: true, news: true, stats: true, ai: true })
+    setLoading({ profile: true, kline: true, financials: true, news: true, stats: true, ai: false })
     setAiAnalysis(null)
+    setAiError('')
     setStockStats(null)
+    setFinancialPeriods([])
+    setFinancialSummary(null)
 
-    // Fetch non-AI data in parallel
-    const [p, k, f, n, s, d] = await Promise.allSettled([
+    // Fetch non-AI data and saved AI cache in parallel. Saved AI does not call the model.
+    const [p, k, f, fp, fs, n, s, d, ai] = await Promise.allSettled([
       getStockProfile(symbol!),
       getKLineData(symbol!, period, klineLimit),
       getFinancials(symbol!),
+      getFinancialPeriods(symbol!, 'quarter', 0),
+      getFinancialSummary(symbol!),
       getNews(symbol!),
       getStockStats(symbol!),
       getDividends(symbol!),
+      getSavedAIAnalysis(symbol!),
     ])
 
     if (p.status === 'fulfilled') setProfile(p.value)
     if (k.status === 'fulfilled') setKlineData(k.value)
     if (f.status === 'fulfilled') setFinancials(f.value)
+    if (fp.status === 'fulfilled') setFinancialPeriods(fp.value)
+    if (fs.status === 'fulfilled') setFinancialSummary(fs.value)
     if (n.status === 'fulfilled') setNews(n.value)
     if (s.status === 'fulfilled') setStockStats(s.value)
     if (d.status === 'fulfilled') setDividends(d.value)
+    if (ai.status === 'fulfilled' && ai.value) setAiAnalysis(ai.value)
 
     if (p.status === 'rejected') {
       setError(p.reason?.message || '数据加载失败')
     }
 
     setLoading((l) => ({ ...l, profile: false, kline: false, financials: false, news: false, stats: false }))
-
-    // Start AI streaming
-    setLoading((l) => ({ ...l, ai: true }))
-    setAiStreaming(true)
-    streamAIAnalysis(
-      symbol!,
-      (field, value) => {
-        setAiAnalysis((prev) => ({ ...prev, [field]: value }))
-      },
-      () => {
-        setLoading((l) => ({ ...l, ai: false }))
-        setAiStreaming(false)
-      },
-      () => {
-        setLoading((l) => ({ ...l, ai: false }))
-        setAiStreaming(false)
-      },
-    )
   }, [symbol, isValidSymbol])
 
   const refreshKline = useCallback(async () => {
@@ -183,14 +180,23 @@ export default function StockDashboard() {
   const handleRegenerateAI = useCallback(() => {
     if (!isValidSymbol) return
     setAiAnalysis(null)
+    setAiError('')
     setAiStreaming(true)
+    setLoading((l) => ({ ...l, ai: true }))
     streamAIAnalysis(
       symbol!,
       (field, value) => {
         setAiAnalysis((prev) => ({ ...prev, [field]: value }))
       },
-      () => setAiStreaming(false),
-      () => setAiStreaming(false),
+      () => {
+        setAiStreaming(false)
+        setLoading((l) => ({ ...l, ai: false }))
+      },
+      (error) => {
+        setAiError(error)
+        setAiStreaming(false)
+        setLoading((l) => ({ ...l, ai: false }))
+      },
     )
   }, [symbol, isValidSymbol])
 
@@ -289,6 +295,8 @@ export default function StockDashboard() {
           symbol={symbol!}
           klineData={klineData}
           financials={financials}
+          financialPeriods={financialPeriods}
+          financialSummary={financialSummary}
           dividends={dividends}
           news={news}
           marketStats={stockStats?.marketStats ?? null}
@@ -343,6 +351,8 @@ export default function StockDashboard() {
                   <AIInsightPanel
                     analysis={aiAnalysis}
                     streaming={aiStreaming}
+                    loading={loading.ai}
+                    error={aiError}
                     onRegenerate={handleRegenerateAI}
                   />
                 )}

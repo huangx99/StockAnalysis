@@ -58,12 +58,13 @@ class CustomProvider(AIProvider):
         self.model = settings.custom_model
 
     def _build_context(
-        self, symbol: str, stock_name: str, profile: dict, financials: list[dict], news: list[dict]
+        self, symbol: str, stock_name: str, profile: dict, financials: list[dict] | dict, news: list[dict]
     ) -> str:
+        financial_context = financials[:4] if isinstance(financials, list) else financials
         return (
             f"Stock: {symbol} {stock_name}\n"
             f"Profile: {json.dumps(profile, ensure_ascii=False)}\n"
-            f"Financials: {json.dumps(financials[:4], ensure_ascii=False)}\n"
+            f"Financials: {json.dumps(financial_context, ensure_ascii=False)}\n"
             f"Recent News: {json.dumps(news[:5], ensure_ascii=False)}"
         )
 

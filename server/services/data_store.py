@@ -13,6 +13,9 @@ DOWNLOAD_STATE_FILE = Path(__file__).parent.parent / "data" / "download_state.js
 DATA_TYPES = [
     "profile", "kline_day", "kline_week", "kline_month",
     "financials", "news", "dividends", "notices", "reports",
+    "financial_income_raw", "financial_balance_raw", "financial_cashflow_raw",
+    "financial_indicator_raw", "financial_periods", "financial_summary",
+    "ai_analysis",
 ]
 
 
@@ -21,12 +24,17 @@ def _stock_dir(symbol: str) -> Path:
 
 
 def save_stock_data(symbol: str, data_type: str, data: list | dict) -> None:
-    d = _stock_dir(symbol)
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / f"{data_type}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    logger.debug("[data_store] saved %s/%s (%d bytes)", symbol, data_type, path.stat().st_size)
+    try:
+        d = _stock_dir(symbol)
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{data_type}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        logger.debug("[data_store] saved %s/%s (%d bytes)", symbol, data_type, path.stat().st_size)
+    except PermissionError as e:
+        logger.warning("[data_store] no permission to save %s/%s: %s", symbol, data_type, e)
+    except Exception as e:
+        logger.warning("[data_store] failed to save %s/%s: %s", symbol, data_type, e)
 
 
 def load_stock_data(symbol: str, data_type: str) -> list | dict | None:

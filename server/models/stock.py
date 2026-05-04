@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Literal
+from pydantic import BaseModel, Field
+from typing import Any, Literal
 
 
 class StockSearchResult(BaseModel):
@@ -70,6 +70,91 @@ class FinancialStatement(BaseModel):
     # Cashflow statement — previously fetched but discarded
     investingCashFlow: float = 0.0
     financingCashFlow: float = 0.0
+
+
+class FinancialPeriodMetrics(BaseModel):
+    symbol: str
+    reportDate: str
+    reportYear: int
+    reportQuarter: Literal["Q1", "H1", "Q3", "FY"]
+    reportType: str = ""
+    noticeDate: str = ""
+    currency: str = "CNY"
+    source: str = ""
+    revenue: float = 0.0
+    revenueYoY: float = 0.0
+    operatingCost: float = 0.0
+    grossProfit: float = 0.0
+    grossMargin: float = 0.0
+    salesExpense: float = 0.0
+    manageExpense: float = 0.0
+    rdExpense: float = 0.0
+    financeExpense: float = 0.0
+    operatingProfit: float = 0.0
+    totalProfit: float = 0.0
+    netProfit: float = 0.0
+    netProfitYoY: float = 0.0
+    deductedNetProfit: float = 0.0
+    eps: float = 0.0
+    netMargin: float = 0.0
+    roe: float = 0.0
+    roa: float = 0.0
+    totalAssets: float = 0.0
+    totalLiabilities: float = 0.0
+    equity: float = 0.0
+    cash: float = 0.0
+    accountsReceivable: float = 0.0
+    inventory: float = 0.0
+    contractLiability: float = 0.0
+    goodwill: float = 0.0
+    debtAssetRatio: float = 0.0
+    currentRatio: float = 0.0
+    quickRatio: float = 0.0
+    assetTurnover: float = 0.0
+    receivableTurnover: float = 0.0
+    inventoryTurnover: float = 0.0
+    operatingCashFlow: float = 0.0
+    operatingCashFlowYoY: float = 0.0
+    investingCashFlow: float = 0.0
+    financingCashFlow: float = 0.0
+    capex: float = 0.0
+    freeCashFlow: float = 0.0
+    cfoToNetProfit: float = 0.0
+
+
+class FinancialScores(BaseModel):
+    total: int = 0
+    growth: int = 0
+    profitability: int = 0
+    cashflow: int = 0
+    solvency: int = 0
+    efficiency: int = 0
+    shareholderReturn: int = 0
+
+
+class FinancialAlert(BaseModel):
+    level: Literal["info", "warning", "danger"]
+    title: str
+    message: str
+    metric: str = ""
+    period: str = ""
+
+
+class FinancialSummary(BaseModel):
+    symbol: str
+    latestPeriod: FinancialPeriodMetrics | None = None
+    annual: list[FinancialPeriodMetrics] = Field(default_factory=list)
+    quarterly: list[FinancialPeriodMetrics] = Field(default_factory=list)
+    scores: FinancialScores = FinancialScores()
+    alerts: list[FinancialAlert] = Field(default_factory=list)
+    dataSource: str = ""
+    updatedAt: str = ""
+
+
+class FinancialStatementsResponse(BaseModel):
+    symbol: str
+    statementType: Literal["income", "balance", "cashflow"]
+    rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DividendRecord(BaseModel):

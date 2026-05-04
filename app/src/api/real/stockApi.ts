@@ -3,6 +3,9 @@ import type {
   StockProfile,
   KLineData,
   FinancialStatement,
+  FinancialPeriodMetrics,
+  FinancialSummary,
+  FinancialStatementsResponse,
   DividendRecord,
   AIAnalysis,
   StockDocument,
@@ -13,6 +16,8 @@ import type {
   DataStocksResponse,
   StockStats,
   NewsAnalysis,
+  MarketDownloadStatus,
+  MarketDataSummary,
 } from '../../types';
 
 const BASE = '/api';
@@ -48,6 +53,28 @@ export async function getFinancials(symbol: string): Promise<FinancialStatement[
   return request(`${BASE}/stock/${symbol}/financials`);
 }
 
+export async function getFinancialPeriods(
+  symbol: string,
+  period: 'quarter' | 'annual' = 'quarter',
+  limit = 20,
+): Promise<FinancialPeriodMetrics[]> {
+  const params = new URLSearchParams({ period, limit: String(limit) });
+  return request(`${BASE}/stock/${symbol}/financial/periods?${params}`);
+}
+
+export async function getFinancialSummary(symbol: string): Promise<FinancialSummary> {
+  return request(`${BASE}/stock/${symbol}/financial/summary`);
+}
+
+export async function getFinancialStatements(
+  symbol: string,
+  type: 'income' | 'balance' | 'cashflow',
+  period: 'quarter' | 'annual' = 'quarter',
+): Promise<FinancialStatementsResponse> {
+  const params = new URLSearchParams({ type, period });
+  return request(`${BASE}/stock/${symbol}/financial/statements?${params}`);
+}
+
 export async function getNews(symbol: string): Promise<StockDocument[]> {
   return request(`${BASE}/stock/${symbol}/news`);
 }
@@ -62,6 +89,10 @@ export async function getDividends(symbol: string): Promise<DividendRecord[]> {
 
 export async function getAIAnalysis(symbol: string): Promise<AIAnalysis> {
   return request(`${BASE}/stock/${symbol}/analyze`, { method: 'POST' });
+}
+
+export async function getSavedAIAnalysis(symbol: string): Promise<AIAnalysis | null> {
+  return request(`${BASE}/stock/${symbol}/analyze/saved`);
 }
 
 export function streamAIAnalysis(
@@ -85,6 +116,7 @@ export function streamAIAnalysis(
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let receivedField = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -97,18 +129,27 @@ export function streamAIAnalysis(
           try {
             const event = JSON.parse(line.slice(6));
             if (event.field === '__done__') {
+              if (!receivedField) {
+                onError('AI 未返回有效内容，请检查模型配置或稍后重试');
+                return;
+              }
               onDone();
               return;
             } else if (event.field === '__error__') {
-              onError(event.value);
+              onError(String(event.value || 'AI 分析失败'));
               return;
             } else {
+              receivedField = true;
               onField(event.field, event.value);
             }
           } catch {
             // skip malformed lines
           }
         }
+      }
+      if (!receivedField) {
+        onError('AI 连接已结束，但没有收到分析内容');
+        return;
       }
       onDone();
     } catch (err: unknown) {
@@ -222,4 +263,117 @@ export async function analyzeNewsItem(
 
 export async function getIndustryStocks(industry: string): Promise<{ industry: string; items: { code: string; name: string }[] }> {
   return request(`${BASE}/system/industry/${encodeURIComponent(industry)}/stocks`);
+}
+
+
+export interface SectorInfo {
+  name: string;
+  strength_score: number;
+  trend: 'up' | 'down' | 'flat';
+  is_mainline: boolean;
+  reason: string;
+}
+
+export interface LeaderInfo {
+  code: string;
+  name: string;
+  sector: string;
+  board_height: number;
+  role: '总龙头' | '板块龙头' | '跟风';
+  strength: number;
+}
+
+export interface MarketAIAnalysis {
+  summary: {
+    stage: string;
+    emotion_score: number;
+    risk_level: '低' | '中' | '高';
+    confidence: number;
+  };
+  conclusion: {
+    one_line: string;
+    reasoning: string[];
+  };
+  strategy: {
+    can_do: string[];
+    cannot_do: string[];
+    watch_signals: string[];
+  };
+  mainline: {
+    sectors: SectorInfo[];
+    status: string;
+  };
+  leaders: LeaderInfo[];
+  risk: {
+    warnings: string[];
+    anomalies: string[];
+  };
+  range?: { startDate: string; endDate: string; snapshotCount: number; omittedSnapshots: number };
+  includedDataTypes?: string[];
+  generatedAt?: string;
+  aiStatus?: { available: boolean; message: string };
+  rawSignals?: Record<string, unknown>;
+}
+
+
+export async function analyzeMarketData(params: {
+  startDate: string;
+  endDate: string;
+  dataTypes?: string[];
+  maxDays?: number;
+}): Promise<MarketAIAnalysis> {
+  return request(`${BASE}/market/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getMarketDataStatus(): Promise<MarketDownloadStatus> {
+  return request(`${BASE}/system/market-data/status`);
+}
+
+export async function getMarketTradeDates(params: { startDate: string; endDate: string }): Promise<{ items: string[] }> {
+  const query = new URLSearchParams();
+  query.set('startDate', params.startDate);
+  query.set('endDate', params.endDate);
+  return request(`${BASE}/system/market-data/trade-dates?${query}`);
+}
+
+export async function startMarketDataDownload(params?: { tradeDate?: string; startDate?: string; endDate?: string; dates?: string[] }): Promise<{ status: string; tradeDate?: string; tradeDates?: string[]; total?: number; normalizedNote?: string }> {
+  const query = new URLSearchParams();
+  if (params?.tradeDate) query.set('tradeDate', params.tradeDate);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  params?.dates?.forEach((date) => query.append('dates', date));
+  const suffix = query.toString() ? `?${query}` : '';
+  return request(`${BASE}/system/market-data/download${suffix}`, { method: 'POST' });
+}
+
+export async function pauseMarketDataDownload(): Promise<{ status: string }> {
+  return request(`${BASE}/system/market-data/pause`, { method: 'POST' });
+}
+
+export async function resumeMarketDataDownload(): Promise<{ status: string }> {
+  return request(`${BASE}/system/market-data/resume`, { method: 'POST' });
+}
+
+export async function cancelMarketDataDownload(): Promise<{ status: string }> {
+  return request(`${BASE}/system/market-data/cancel`, { method: 'POST' });
+}
+
+export async function resetMarketDataStatus(): Promise<{ status: string }> {
+  return request(`${BASE}/system/market-data/reset`, { method: 'POST' });
+}
+
+export async function getMarketDataSnapshots(): Promise<{ items: MarketDataSummary[] }> {
+  return request(`${BASE}/system/market-data/snapshots`);
+}
+
+export async function deleteMarketData(tradeDate: string): Promise<{ status: string; message: string }> {
+  return request(`${BASE}/system/market-data/${tradeDate}`, { method: 'DELETE' });
+}
+
+export async function getMarketDataDetail<T = unknown>(tradeDate: string, dataType: string): Promise<{ tradeDate: string; dataType: string; data: T | null; error?: string }> {
+  return request(`${BASE}/system/market-data/${tradeDate}/${dataType}`);
 }

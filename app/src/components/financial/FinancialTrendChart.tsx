@@ -26,7 +26,9 @@ export default function FinancialTrendChart({ data }: FinancialTrendChartProps) 
   const toYi = (v: number) => Number(((v ?? 0) / 100000000).toFixed(1))
 
   const chartData = useMemo(() => {
-    return data.map((d) => ({
+    return [...data]
+      .sort((a, b) => a.year - b.year)
+      .map((d) => ({
       year: String(d.year),
       revenue: toYi(d.revenue),
       netProfit: toYi(d.netProfit),

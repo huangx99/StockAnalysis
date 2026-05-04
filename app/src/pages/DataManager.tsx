@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Database, Download, RefreshCw, Trash2, Search,
@@ -13,6 +13,7 @@ import {
   AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
+import { MarketDataPanel } from '@/pages/MarketDataManager'
 import {
   getDataStatus, getDataStocks, searchStocks as apiSearch,
   downloadStockData, refreshStockData, refreshAllData, deleteStockData,
@@ -41,6 +42,7 @@ const DATA_TYPE_LABELS: Record<string, string> = {
   reports: '研报',
 }
 
+
 interface QueueItem {
   id: string
   symbol: string
@@ -65,6 +67,8 @@ function saveQueue(q: QueueItem[]) {
 
 export default function DataManager() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') === 'market' ? 'market' : 'stock'
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -99,6 +103,7 @@ export default function DataManager() {
   const [refreshingSymbol, setRefreshingSymbol] = useState<string | null>(null)
   const [refreshingAll, setRefreshingAll] = useState(false)
 
+
   const fetchStocks = useCallback(async (p: number, q: string) => {
     setLoading(true)
     try {
@@ -116,6 +121,7 @@ export default function DataManager() {
     } catch {}
   }, [])
 
+
   useEffect(() => {
     fetchStocks(1, '')
     fetchBatchStatus()
@@ -131,6 +137,7 @@ export default function DataManager() {
     return () => clearInterval(timer)
   }, [batchStatus?.status])
 
+
   // Auto-scroll log box to bottom
   useEffect(() => {
     if (logBoxRef.current) {
@@ -138,9 +145,10 @@ export default function DataManager() {
     }
   }, [batchStatus?.logs?.length])
 
-  // Auto-dismiss paused/completed status after 5 seconds
+
+  // Auto-dismiss completed status after 5 seconds. Keep paused state so downloads can resume.
   useEffect(() => {
-    if (batchStatus?.status === 'paused' || batchStatus?.status === 'completed') {
+    if (batchStatus?.status === 'completed') {
       const timer = setTimeout(() => {
         setBatchStatus(null)
         resetDataStatus()
@@ -148,6 +156,7 @@ export default function DataManager() {
       return () => clearTimeout(timer)
     }
   }, [batchStatus?.status])
+
 
   // Poll single stock download progress
   useEffect(() => {
@@ -166,9 +175,11 @@ export default function DataManager() {
   }, [queue])
 
   const dismissBatchStatus = () => {
+    const shouldReset = batchStatus?.status !== 'paused'
     setBatchStatus(null)
-    resetDataStatus()
+    if (shouldReset) resetDataStatus()
   }
+
 
   // Debounced search
   useEffect(() => {
@@ -304,6 +315,7 @@ export default function DataManager() {
     setRefreshingAll(false)
   }
 
+
   const handleDelete = async (symbol: string) => {
     if (!confirm(`确定删除 ${symbol} 的本地数据？`)) return
     await deleteStockData(symbol)
@@ -320,6 +332,29 @@ export default function DataManager() {
         <h1 className="font-h1" style={{ color: 'var(--text-primary)' }}>数据管理</h1>
       </div>
 
+      <div className="flex flex-wrap gap-2 rounded-xl border border-border-subtle p-2" style={{ backgroundColor: 'var(--bg-surface)' }}>
+        {[
+          { key: 'stock', label: '个股数据' },
+          { key: 'market', label: '市场数据' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setSearchParams(tab.key === 'market' ? { tab: 'market' } : {})}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{
+              backgroundColor: activeTab === tab.key ? 'var(--accent-primary)' : 'transparent',
+              color: activeTab === tab.key ? '#fff' : 'var(--text-secondary)',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'market' ? (
+        <MarketDataPanel embedded showViewer={false} />
+      ) : (
+        <>
       {/* Action Buttons Row */}
       <div className="flex flex-wrap gap-3">
         <Button variant="outline" onClick={() => { setShowIndustry(true); loadIndustries() }}>
@@ -777,6 +812,8 @@ export default function DataManager() {
           </motion.div>
         )}
       </AnimatePresence>
+        </>
+      )}
     </div>
   )
 }

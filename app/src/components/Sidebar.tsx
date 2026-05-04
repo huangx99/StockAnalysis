@@ -10,6 +10,7 @@ const navItems = [
   { icon: Newspaper, label: '公告新闻', to: '#', disabled: true },
   { icon: FileText, label: 'AI 研究报告', to: '#', disabled: true },
   { icon: Database, label: '数据管理', to: '/data', active: false },
+  { icon: BarChart3, label: '市场总览', to: '/market', active: false },
   { icon: Settings, label: '系统设置', to: '/settings', active: false },
 ]
 

@@ -1,21 +1,21 @@
 #!/bin/bash
-# 一键启动（构建前端 + 后端服务，统一 888 端口）
+# 一键启动（构建前端 + 后端服务，统一 1335 端口）
 # 用法: bash start.sh
 # 停止: bash start.sh stop
 
 set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-PORT=888
+PORT=1335
 LOG=/tmp/stock-server.log
 VENV_PYTHON="$ROOT/server/venv/bin/python"
 SERVER_DIR="$ROOT/server"
 
 stop() {
     echo "停止服务..."
-    PID=$(sudo lsof -ti:$PORT 2>/dev/null || true)
+    PID=$(lsof -ti:$PORT 2>/dev/null || true)
     if [ -n "$PID" ]; then
-        sudo kill -9 $PID 2>/dev/null || true
+        kill -9 $PID 2>/dev/null || true
         echo "已停止 (PID: $PID)"
     else
         echo "服务未运行"
@@ -35,18 +35,16 @@ cd "$ROOT/app"
 echo "构建前端..."
 npm run build
 
-# 用 sudo 启动后端（用 sudo -b 后台运行）
 echo ""
 echo "启动服务 → http://127.0.0.1:$PORT"
-echo "（需要输入 sudo 密码）"
-sudo -b "$VENV_PYTHON" -m uvicorn main:app \
+setsid nohup "$VENV_PYTHON" -m uvicorn main:app \
     --app-dir "$SERVER_DIR" \
-    --host 127.0.0.1 --port $PORT --log-level info > "$LOG" 2>&1
+    --host 127.0.0.1 --port $PORT --log-level info > "$LOG" 2>&1 &
 
 sleep 2
 
 # 检查是否启动成功
-PID=$(sudo lsof -ti:$PORT 2>/dev/null || true)
+PID=$(lsof -ti:$PORT 2>/dev/null || true)
 if [ -n "$PID" ]; then
     echo ""
     echo "启动成功! PID: $PID"

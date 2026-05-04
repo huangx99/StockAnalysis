@@ -8,6 +8,8 @@ from models.system import SystemStatus, AIConfigRequest, AIConfigResponse
 from services import ai_service
 from services import data_store
 from services import batch_downloader
+from services import market_data_store
+from services import market_downloader
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -171,6 +173,82 @@ async def delete_stock(symbol: str):
     if deleted:
         return {"status": "ok", "message": f"Deleted data for {symbol}"}
     return {"status": "not_found", "message": f"No data found for {symbol}"}
+
+
+@router.get("/system/market-data/status")
+async def market_data_status():
+    return market_downloader.get_market_download_status()
+
+
+@router.get("/system/market-data/trade-dates")
+async def market_trade_dates(
+    startDate: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    endDate: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    dates = market_downloader.get_trade_dates(startDate, endDate)
+    return {"items": dates}
+
+
+@router.post("/system/market-data/download")
+async def start_market_data_download(
+    tradeDate: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    startDate: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    endDate: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    dates: list[str] | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    return await market_downloader.start_market_download(tradeDate, startDate, endDate, dates)
+
+
+@router.post("/system/market-data/pause")
+async def pause_market_data_download():
+    return await market_downloader.pause_market_download()
+
+
+@router.post("/system/market-data/resume")
+async def resume_market_data_download():
+    return await market_downloader.resume_market_download()
+
+
+@router.post("/system/market-data/cancel")
+async def cancel_market_data_download():
+    return await market_downloader.cancel_market_download()
+
+
+@router.post("/system/market-data/reset")
+async def reset_market_data_status():
+    return market_downloader.reset_market_download_status()
+
+
+@router.get("/system/market-data/snapshots")
+async def market_data_snapshots():
+    return {"items": market_data_store.list_market_snapshots()}
+
+
+@router.get("/system/market-data/latest")
+async def latest_market_data():
+    trade_date = market_data_store.get_latest_trade_date()
+    if not trade_date:
+        return {"tradeDate": None, "overview": None, "sentiment": None}
+    return market_data_store.get_market_data_summary(trade_date)
+
+
+@router.get("/system/market-data/{trade_date}/{data_type}")
+async def market_data_detail(trade_date: str, data_type: str):
+    if data_type not in market_data_store.MARKET_DATA_TYPES:
+        return {"tradeDate": trade_date, "dataType": data_type, "data": None, "error": "Invalid data type"}
+    return {
+        "tradeDate": trade_date,
+        "dataType": data_type,
+        "data": market_data_store.load_market_data(trade_date, data_type),
+    }
+
+
+@router.delete("/system/market-data/{trade_date}")
+async def delete_market_data(trade_date: str):
+    deleted = market_data_store.delete_market_data(trade_date)
+    if deleted:
+        return {"status": "ok", "message": f"Deleted market data for {trade_date}"}
+    return {"status": "not_found", "message": f"No market data found for {trade_date}"}
 
 
 @router.get("/system/industries")

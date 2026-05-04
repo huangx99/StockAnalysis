@@ -1,17 +1,17 @@
 #!/bin/bash
 # 快速启动脚本 - 杀掉旧进程，后台启动服务
-# 用法: sudo bash start.sh
+# 用法: bash start.sh
 
 set -e
 
-PORT=888
+PORT=1335
 HOST=127.0.0.1
 LOG=/tmp/stock-server.log
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$DIR"
 
-# 杀掉占用 888 端口的进程
+# 杀掉占用 1335 端口的进程
 PID=$(lsof -ti:$PORT 2>/dev/null || true)
 if [ -n "$PID" ]; then
     echo "杀掉旧进程 PID=$PID"

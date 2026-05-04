@@ -234,19 +234,116 @@ def fetch_financial_report(symbol: str, report_type: str) -> pd.DataFrame | None
         return None
 
 
-def fetch_dividend_data(symbol: str) -> pd.DataFrame | None:
-    """Fetch dividend/split data via stock_fhps_em."""
+def _em_stock_symbol(symbol: str) -> str:
+    """Return EastMoney report symbol like SH600519 / SZ000001 / BJ830799."""
+    if symbol.startswith(("SH", "SZ", "BJ")):
+        return symbol
+    if symbol.startswith("6"):
+        return f"SH{symbol}"
+    if symbol.startswith(("0", "3")):
+        return f"SZ{symbol}"
+    if symbol.startswith(("4", "8")):
+        return f"BJ{symbol}"
+    return f"SZ{symbol}"
+
+
+def fetch_financial_report_em(symbol: str, report_type: str) -> pd.DataFrame | None:
+    """
+    Fetch full EastMoney financial reports.
+
+    report_type: "income" | "balance" | "cashflow"
+    """
+    em_symbol = _em_stock_symbol(symbol)
+    func_map = {
+        "income": ak.stock_profit_sheet_by_report_em,
+        "balance": ak.stock_balance_sheet_by_report_em,
+        "cashflow": ak.stock_cash_flow_sheet_by_report_em,
+    }
+    func = func_map.get(report_type)
+    if func is None:
+        raise ValueError(f"Unknown report_type: {report_type}")
+
     try:
-        logger.info("[adapter] calling stock_fhps_em(%s)...", symbol)
+        logger.info("[adapter] calling %s(%s)...", func.__name__, em_symbol)
         t0 = time.time()
-        df = ak.stock_fhps_em(symbol=symbol)
-        logger.info("[adapter] stock_fhps_em(%s) returned %d rows in %.2fs",
+        df = func(symbol=em_symbol)
+        if df is None or df.empty:
+            logger.warning("%s(%s) returned empty", func.__name__, em_symbol)
+            return None
+        logger.info("[adapter] %s(%s) returned %d rows in %.2fs",
+                    func.__name__, em_symbol, len(df), time.time() - t0)
+        return df
+    except Exception as e:
+        logger.warning("%s(%s) failed: %s", func.__name__, em_symbol, e)
+        return None
+
+
+def fetch_financial_indicators(symbol: str, start_year: str = "2016") -> pd.DataFrame | None:
+    """Fetch computed financial indicators via stock_financial_analysis_indicator."""
+    try:
+        logger.info("[adapter] calling stock_financial_analysis_indicator(%s, %s)...", symbol, start_year)
+        t0 = time.time()
+        df = ak.stock_financial_analysis_indicator(symbol=symbol, start_year=start_year)
+        if df is None or df.empty:
+            return None
+        logger.info("[adapter] stock_financial_analysis_indicator(%s) returned %d rows in %.2fs",
                     symbol, len(df), time.time() - t0)
-        return _validate_and_normalize_df(df, DIVIDEND_COLUMNS, f"stock_fhps_em({symbol})")
+        return df
+    except Exception as e:
+        logger.warning("stock_financial_analysis_indicator(%s) failed: %s", symbol, e)
+        return None
+
+
+def fetch_dividend_data(symbol: str) -> pd.DataFrame | None:
+    """Fetch per-stock dividend/split data.
+
+    Prefer stock_fhps_detail_em(symbol), because stock_fhps_em is a date-wide
+    market interface in AKShare 1.18.x, not a per-stock interface.
+    """
+    try:
+        logger.info("[adapter] calling stock_fhps_detail_em(%s)...", symbol)
+        t0 = time.time()
+        df = ak.stock_fhps_detail_em(symbol=symbol)
+        if df is None or df.empty:
+            logger.info("[adapter] stock_fhps_detail_em(%s) returned empty", symbol)
+            return None
+
+        normalized = pd.DataFrame({
+            "报告日": df.get("报告期"),
+            "除权除息日": df.get("除权除息日"),
+            "派息": pd.to_numeric(df.get("现金分红-现金分红比例"), errors="coerce").fillna(0) / 10,
+            "送股": pd.to_numeric(df.get("送转股份-送股比例"), errors="coerce").fillna(0) / 10,
+            "转增": pd.to_numeric(df.get("送转股份-转股比例"), errors="coerce").fillna(0) / 10,
+            "股权登记日": df.get("股权登记日"),
+            "进度": df.get("方案进度"),
+            "分红说明": df.get("现金分红-现金分红比例描述"),
+        })
+        logger.info("[adapter] stock_fhps_detail_em(%s) returned %d rows in %.2fs",
+                    symbol, len(df), time.time() - t0)
+        return _validate_and_normalize_df(normalized, DIVIDEND_COLUMNS, f"stock_fhps_detail_em({symbol})")
+    except Exception as e:
+        logger.warning("stock_fhps_detail_em(%s) failed: %s", symbol, e)
+
+    try:
+        logger.info("[adapter] fallback calling stock_dividend_cninfo(%s)...", symbol)
+        df = ak.stock_dividend_cninfo(symbol=symbol)
+        if df is None or df.empty:
+            return None
+        normalized = pd.DataFrame({
+            "报告日": df.get("报告时间"),
+            "除权除息日": df.get("除权日"),
+            "派息": pd.to_numeric(df.get("派息比例"), errors="coerce").fillna(0) / 10,
+            "送股": pd.to_numeric(df.get("送股比例"), errors="coerce").fillna(0) / 10,
+            "转增": pd.to_numeric(df.get("转增比例"), errors="coerce").fillna(0) / 10,
+            "股权登记日": df.get("股权登记日"),
+            "进度": df.get("分红类型"),
+            "分红说明": df.get("实施方案分红说明"),
+        })
+        return _validate_and_normalize_df(normalized, DIVIDEND_COLUMNS, f"stock_dividend_cninfo({symbol})")
     except ColumnValidationError:
         raise
     except Exception as e:
-        logger.warning("stock_fhps_em(%s) failed: %s", symbol, e)
+        logger.warning("stock_dividend_cninfo(%s) failed: %s", symbol, e)
         return None
 
 

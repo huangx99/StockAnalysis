@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 
 from models.ai import AIAnalysis, AIReport
 
@@ -11,7 +11,7 @@ class AIProvider(ABC):
         symbol: str,
         stock_name: str,
         profile_data: dict,
-        financials_data: list[dict],
+        financials_data: list[dict] | dict[str, Any],
         news_data: list[dict],
     ) -> AIAnalysis:
         ...
@@ -21,7 +21,7 @@ class AIProvider(ABC):
         symbol: str,
         stock_name: str,
         profile_data: dict,
-        financials_data: list[dict],
+        financials_data: list[dict] | dict[str, Any],
         news_data: list[dict],
     ) -> AsyncGenerator[tuple[str, object], None]:
         """Yield (field_name, value) pairs as analysis fields become available."""
@@ -35,7 +35,7 @@ class AIProvider(ABC):
         symbol: str,
         stock_name: str,
         profile_data: dict,
-        financials_data: list[dict],
+        financials_data: list[dict] | dict[str, Any],
         news_data: list[dict],
     ) -> AIReport:
         ...

@@ -102,6 +102,91 @@ export interface FinancialStatement {
   financingCashFlow: number;
 }
 
+export interface FinancialPeriodMetrics {
+  symbol: string;
+  reportDate: string;
+  reportYear: number;
+  reportQuarter: 'Q1' | 'H1' | 'Q3' | 'FY';
+  reportType: string;
+  noticeDate: string;
+  currency: string;
+  source: string;
+  revenue: number;
+  revenueYoY: number;
+  operatingCost: number;
+  grossProfit: number;
+  grossMargin: number;
+  salesExpense: number;
+  manageExpense: number;
+  rdExpense: number;
+  financeExpense: number;
+  operatingProfit: number;
+  totalProfit: number;
+  netProfit: number;
+  netProfitYoY: number;
+  deductedNetProfit: number;
+  eps: number;
+  netMargin: number;
+  roe: number;
+  roa: number;
+  totalAssets: number;
+  totalLiabilities: number;
+  equity: number;
+  cash: number;
+  accountsReceivable: number;
+  inventory: number;
+  contractLiability: number;
+  goodwill: number;
+  debtAssetRatio: number;
+  currentRatio: number;
+  quickRatio: number;
+  assetTurnover: number;
+  receivableTurnover: number;
+  inventoryTurnover: number;
+  operatingCashFlow: number;
+  operatingCashFlowYoY: number;
+  investingCashFlow: number;
+  financingCashFlow: number;
+  capex: number;
+  freeCashFlow: number;
+  cfoToNetProfit: number;
+}
+
+export interface FinancialScores {
+  total: number;
+  growth: number;
+  profitability: number;
+  cashflow: number;
+  solvency: number;
+  efficiency: number;
+  shareholderReturn: number;
+}
+
+export interface FinancialAlert {
+  level: 'info' | 'warning' | 'danger';
+  title: string;
+  message: string;
+  metric: string;
+  period: string;
+}
+
+export interface FinancialSummary {
+  symbol: string;
+  latestPeriod: FinancialPeriodMetrics | null;
+  annual: FinancialPeriodMetrics[];
+  quarterly: FinancialPeriodMetrics[];
+  scores: FinancialScores;
+  alerts: FinancialAlert[];
+  dataSource: string;
+  updatedAt: string;
+}
+
+export interface FinancialStatementsResponse {
+  symbol: string;
+  statementType: 'income' | 'balance' | 'cashflow';
+  rows: Record<string, unknown>[];
+}
+
 export interface DividendRecord {
   year: number;
   dividendPerShare: number;
@@ -197,4 +282,85 @@ export interface DataStocksResponse {
   page: number;
   pageSize: number;
   items: StockDataSummary[];
+}
+
+export interface MarketDownloadStatus {
+  status: 'idle' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'completed' | 'error';
+  jobId?: string | null;
+  tradeDate: string | null;
+  tradeDates?: string[];
+  total: number;
+  completed: number;
+  failed: string[];
+  currentType: string | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  dataTypes: string[];
+  logs: string[];
+}
+
+export interface MarketDataSummary {
+  tradeDate: string;
+  exists: boolean;
+  dataTypes: Record<string, { exists: boolean; size: number; updatedAt: string | null }>;
+  totalSize: number;
+  overview?: {
+    tradeDate: string;
+    updatedAt: string;
+    totalTurnover: number;
+    upCount: number;
+    downCount: number;
+    flatCount: number;
+    avgChangePercent: number;
+    medianChangePercent: number;
+    northNetBuy: number | null;
+    northNetInflow: number | null;
+    northDataDate?: string;
+    northDataStatus?: string;
+    limitUpCount: number;
+    limitDownCount: number;
+    limitUpAvailable?: boolean;
+    limitDownAvailable?: boolean;
+    sourceErrors?: Record<string, string>;
+    source: string;
+  } | null;
+  sentiment?: {
+    tradeDate: string;
+    updatedAt: string;
+    limitUpCount: number;
+    limitDownCount: number;
+    limitUpAvailable?: boolean;
+    limitDownAvailable?: boolean;
+    dataQuality?: 'complete' | 'partial';
+    sourceErrors?: Record<string, string>;
+    highestBoard: number;
+    breakCount: number;
+    breakRate: number;
+    marketPhase: string;
+    hotIndustries: { industry: string; limitUpCount: number }[];
+    leaders: Record<string, unknown>[];
+  } | null;
+  marketIndices?: {
+    items: Record<string, unknown>[];
+    leader?: Record<string, unknown> | null;
+    laggard?: Record<string, unknown> | null;
+    coverage?: { matched: number; total: number };
+  } | null;
+  breadth?: {
+    distribution?: { range: string; count: number }[];
+    newHighLow?: Record<string, unknown> | null;
+    activity?: Record<string, unknown>[];
+    turnoverStats?: Record<string, unknown>;
+  } | null;
+  styleRotation?: {
+    styles?: Record<string, unknown>[];
+    leader?: Record<string, unknown> | null;
+    laggard?: Record<string, unknown> | null;
+  } | null;
+  qualityReport?: {
+    level: 'complete' | 'warning' | 'error';
+    score: number;
+    summary: string;
+    checks: Record<string, unknown>[];
+  } | null;
 }

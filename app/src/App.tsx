@@ -5,6 +5,7 @@ import StockDashboard from './pages/StockDashboard'
 import AIReportPage from './pages/AIReport'
 import Settings from './pages/Settings'
 import DataManager from './pages/DataManager'
+import MarketDataManager from './pages/MarketDataManager'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="/stock/:symbol" element={<StockDashboard />} />
         <Route path="/stock/:symbol/report" element={<AIReportPage />} />
         <Route path="/data" element={<DataManager />} />
+        <Route path="/market" element={<MarketDataManager />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>

@@ -10,6 +10,8 @@ import type { AIAnalysis } from '@/types'
 interface AIInsightPanelProps {
   analysis: Partial<AIAnalysis> | null
   streaming: boolean
+  loading?: boolean
+  error?: string
   onRegenerate: () => void
 }
 
@@ -116,7 +118,7 @@ const SECTIONS = [
   { key: 'newsDigest', num: 5, title: '公告与新闻摘要', icon: FileText, color: 'var(--warning)' },
 ] as const
 
-export default function AIInsightPanel({ analysis, streaming, onRegenerate }: AIInsightPanelProps) {
+export default function AIInsightPanel({ analysis, streaming, loading = false, error = '', onRegenerate }: AIInsightPanelProps) {
   const navigate = useNavigate()
   const hasData = analysis && Object.keys(analysis).length > 0
 
@@ -147,22 +149,37 @@ export default function AIInsightPanel({ analysis, streaming, onRegenerate }: AI
         基于财报、公告、新闻的 AI 评估
       </p>
 
+      {error && !streaming && (
+        <div className="rounded-lg border px-3 py-2 text-sm" style={{ borderColor: 'var(--danger)', backgroundColor: 'rgba(239,68,68,0.08)', color: 'var(--danger)' }}>
+          {error}
+        </div>
+      )}
+
       {!hasData && !streaming ? (
         <div className="flex flex-col items-center justify-center py-8 gap-3">
-          <Settings className="w-8 h-8" style={{ color: 'var(--text-muted)' }} />
+          <Sparkles className="w-8 h-8" style={{ color: 'var(--accent-secondary)' }} />
           <span className="font-body text-sm" style={{ color: 'var(--text-muted)' }}>
-            AI 分析服务未配置
+            点击按钮后开始 AI 分析，不会自动消耗额度
           </span>
           <button
-            onClick={() => navigate('/settings')}
-            className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+            onClick={onRegenerate}
+            disabled={loading}
+            className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
             style={{
-              backgroundColor: 'var(--bg-surface-hover)',
-              color: 'var(--accent-primary)',
+              backgroundColor: 'var(--accent-secondary)',
+              color: '#fff',
               border: '1px solid var(--border-subtle)',
             }}
           >
-            前往设置
+            开始 AI 分析
+          </button>
+          <button
+            onClick={() => navigate('/settings')}
+            className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <Settings className="w-3.5 h-3.5" />
+            AI 设置
           </button>
         </div>
       ) : (
@@ -275,7 +292,7 @@ export default function AIInsightPanel({ analysis, streaming, onRegenerate }: AI
               style={{ color: 'var(--text-primary)', backgroundColor: 'var(--bg-surface-hover)' }}
             >
               <Sparkles className="w-4 h-4" />
-              重新生成分析
+              更新 AI 分析
             </button>
           )}
         </>

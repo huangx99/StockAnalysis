@@ -7,7 +7,17 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
-from models.stock import StockSearchResult, StockProfile, KLineData, FinancialStatement, DividendRecord, StockStats
+from models.stock import (
+    StockSearchResult,
+    StockProfile,
+    KLineData,
+    FinancialStatement,
+    FinancialPeriodMetrics,
+    FinancialSummary,
+    FinancialStatementsResponse,
+    DividendRecord,
+    StockStats,
+)
 from models.document import StockDocument
 from services import stock_service
 
@@ -37,6 +47,53 @@ async def kline(
 @router.get("/stock/{symbol}/financials", response_model=list[FinancialStatement])
 async def financials(symbol: str):
     return await stock_service.get_financials(symbol)
+
+
+@router.get("/stock/{symbol}/financial/periods", response_model=list[FinancialPeriodMetrics])
+async def financial_periods(
+    symbol: str,
+    period: str = Query("quarter", pattern="^(quarter|annual)$"),
+    limit: int = Query(20, ge=0),
+):
+    return await stock_service.get_financial_periods(symbol, period, limit)
+
+
+@router.get("/stock/{symbol}/financial/summary", response_model=FinancialSummary)
+async def financial_summary(symbol: str):
+    return await stock_service.get_financial_summary(symbol)
+
+
+@router.get("/stock/{symbol}/financial/statements", response_model=FinancialStatementsResponse)
+async def financial_statements(
+    symbol: str,
+    type: str = Query(..., pattern="^(income|balance|cashflow)$"),
+    period: str = Query("quarter", pattern="^(quarter|annual)$"),
+):
+    return await stock_service.get_financial_statements(symbol, type, period)
+
+
+@router.get("/stock/{symbol}/financial/ratios")
+async def financial_ratios(
+    symbol: str,
+    period: str = Query("quarter", pattern="^(quarter|annual)$"),
+    limit: int = Query(20, ge=0),
+):
+    return await stock_service.get_financial_ratios(symbol, period, limit)
+
+
+@router.get("/stock/{symbol}/financial/valuation")
+async def financial_valuation(symbol: str):
+    return await stock_service.get_financial_valuation(symbol)
+
+
+@router.get("/stock/{symbol}/financial/alerts")
+async def financial_alerts(symbol: str):
+    return await stock_service.get_financial_alerts(symbol)
+
+
+@router.get("/stock/{symbol}/financial/peers")
+async def financial_peers(symbol: str):
+    return await stock_service.get_financial_peers(symbol)
 
 
 @router.get("/stock/{symbol}/news", response_model=list[StockDocument])

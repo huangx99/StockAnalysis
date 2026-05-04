@@ -96,6 +96,11 @@ if DIST_DIR.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """所有非 /api 路由返回前端 index.html（SPA 路由）"""
+        if full_path.startswith("api/"):
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "API endpoint not found", "code": "API_NOT_FOUND"},
+            )
         file_path = DIST_DIR / full_path
         if file_path.is_file():
             return FileResponse(file_path)

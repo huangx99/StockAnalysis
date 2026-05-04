@@ -11,11 +11,14 @@ from adapters.akshare_adapter import (
     fetch_stock_info,
     fetch_stock_news,
     fetch_financial_report,
+    fetch_financial_report_em,
+    fetch_financial_indicators,
     fetch_dividend_data,
     fetch_stock_notices,
     fetch_stock_reports,
 )
 from services import data_store
+from services.download_executor import MAX_DOWNLOAD_THREADS, STOCK_DOWNLOAD_CONCURRENCY, install_default_executor
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,30 @@ DATA_TYPE_LABELS = {
     "notices": "公告", "reports": "研报",
 }
 
+SKIP_EXISTING_DATA_TYPES = {"financials", "news", "dividends", "notices", "reports"}
+
 _single_download_state: dict | None = None
+
+
+def _stored_count(symbol: str, data_type: str) -> int:
+    local = data_store.load_stock_data(symbol, data_type)
+    if isinstance(local, list):
+        return len(local)
+    if isinstance(local, dict):
+        return 1
+    return 0
+
+
+def _has_stored_data(symbol: str, data_type: str) -> bool:
+    return data_store.has_stock_data(symbol, data_type)
+
+
+def _has_financial_bundle(symbol: str) -> bool:
+    return _has_stored_data(symbol, "financials") and _has_stored_data(symbol, "financial_periods")
+
+
+def _should_skip_existing(symbol: str, data_type: str, skip_existing: bool) -> bool:
+    return skip_existing and data_type in SKIP_EXISTING_DATA_TYPES and _has_stored_data(symbol, data_type)
 
 
 def _append_log(logs: list[str], msg: str) -> None:
@@ -177,6 +203,32 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
 
 async def _fetch_and_save_financials(symbol: str) -> int:
     try:
+        from services.stock_service import (
+            _annual_legacy_from_periods,
+            _assemble_financial_periods,
+            _build_financial_summary,
+            _records_from_df,
+        )
+
+        income_df, balance_df, cashflow_df, indicator_df = await asyncio.gather(
+            asyncio.to_thread(fetch_financial_report_em, symbol, "income"),
+            asyncio.to_thread(fetch_financial_report_em, symbol, "balance"),
+            asyncio.to_thread(fetch_financial_report_em, symbol, "cashflow"),
+            asyncio.to_thread(fetch_financial_indicators, symbol, "2016"),
+        )
+
+        if income_df is not None:
+            data_store.save_stock_data(symbol, "financial_income_raw", _records_from_df(income_df))
+            data_store.save_stock_data(symbol, "financial_balance_raw", _records_from_df(balance_df))
+            data_store.save_stock_data(symbol, "financial_cashflow_raw", _records_from_df(cashflow_df))
+            data_store.save_stock_data(symbol, "financial_indicator_raw", _records_from_df(indicator_df))
+            periods = _assemble_financial_periods(symbol, income_df, balance_df, cashflow_df, indicator_df)
+            summary = _build_financial_summary(symbol, periods)
+            data_store.save_stock_data(symbol, "financial_periods", [item.model_dump() for item in periods])
+            data_store.save_stock_data(symbol, "financial_summary", summary.model_dump())
+            data_store.save_stock_data(symbol, "financials", [item.model_dump() for item in _annual_legacy_from_periods(periods)])
+            return len(periods)
+
         from services.stock_service import _assemble_financials
 
         profit_df, balance_df, cashflow_df = await asyncio.gather(
@@ -344,7 +396,7 @@ async def _fetch_and_save_reports(symbol: str) -> int:
         return 0
 
 
-async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
+async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None, skip_existing: bool = False) -> dict[str, int]:
     """Download all requested data types for a single stock. Returns {data_type: row_count}."""
     stats: dict[str, int] = {}
     for dt in data_types:
@@ -357,15 +409,30 @@ async def _download_single(symbol: str, name: str, data_types: list[str], spot_d
         elif dt == "kline_month":
             stats[dt] = await _fetch_and_save_kline(symbol, "month")
         elif dt == "financials":
-            stats[dt] = await _fetch_and_save_financials(symbol)
+            if skip_existing and _has_financial_bundle(symbol):
+                stats[dt] = _stored_count(symbol, "financial_periods") or _stored_count(symbol, "financials")
+            else:
+                stats[dt] = await _fetch_and_save_financials(symbol)
         elif dt == "news":
-            stats[dt] = await _fetch_and_save_news(symbol)
+            if _should_skip_existing(symbol, dt, skip_existing):
+                stats[dt] = _stored_count(symbol, dt)
+            else:
+                stats[dt] = await _fetch_and_save_news(symbol)
         elif dt == "dividends":
-            stats[dt] = await _fetch_and_save_dividends(symbol)
+            if _should_skip_existing(symbol, dt, skip_existing):
+                stats[dt] = _stored_count(symbol, dt)
+            else:
+                stats[dt] = await _fetch_and_save_dividends(symbol)
         elif dt == "notices":
-            stats[dt] = await _fetch_and_save_notices(symbol)
+            if _should_skip_existing(symbol, dt, skip_existing):
+                stats[dt] = _stored_count(symbol, dt)
+            else:
+                stats[dt] = await _fetch_and_save_notices(symbol)
         elif dt == "reports":
-            stats[dt] = await _fetch_and_save_reports(symbol)
+            if _should_skip_existing(symbol, dt, skip_existing):
+                stats[dt] = _stored_count(symbol, dt)
+            else:
+                stats[dt] = await _fetch_and_save_reports(symbol)
     return stats
 
 
@@ -439,25 +506,29 @@ def get_single_download_status() -> dict:
     return _single_download_state
 
 
-async def _run_download(symbols: list[dict], data_types: list[str], resume_from: str | None = None):
+async def _run_download(symbols: list[dict], data_types: list[str], resume_from: str | None = None, skip_existing: bool = False):
     global _stop_flag
     _stop_flag = False
+    install_default_executor()
 
     total = len(symbols)
     state = data_store.load_download_state() or {}
-    completed = state.get("completed", 0) if resume_from else 0
+    saved_completed_symbols = set(state.get("completedSymbols") or []) if resume_from else set()
+    completed = len(saved_completed_symbols) if saved_completed_symbols else (state.get("completed", 0) if resume_from else 0)
     failed: list[str] = state.get("failed", []) if resume_from else []
     logs: list[str] = state.get("logs", []) if resume_from else []
+    running_symbols: set[str] = set()
+    last_completed_symbol: str | None = state.get("lastSymbol") if resume_from else None
 
-    # If resuming, skip symbols until we pass the last completed one
     start_idx = 0
-    if resume_from:
-        for i, s in enumerate(symbols):
-            if s["code"] == resume_from:
+    if resume_from and not saved_completed_symbols:
+        for i, stock in enumerate(symbols):
+            if stock["code"] == resume_from:
                 start_idx = i + 1
                 break
 
-    # Load spot data once for all profile fetches
+    pending_symbols = [stock for stock in symbols[start_idx:] if stock["code"] not in saved_completed_symbols]
+
     spot_df = None
     if "profile" in data_types:
         try:
@@ -465,9 +536,17 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
         except Exception as e:
             logger.error("[download] failed to load spot data: %s", e)
 
-    remaining = total - start_idx
-    logger.info("[download] starting: %d stocks, types=%s, resume_from=%s", remaining, data_types, resume_from)
-    _append_log(logs, f"开始下载 {remaining} 只股票")
+    concurrency = min(STOCK_DOWNLOAD_CONCURRENCY, max(1, len(pending_symbols))) if pending_symbols else 1
+    logger.info(
+        "[download] starting concurrent: %d pending/%d stocks, concurrency=%d, threads=%d, types=%s, resume_from=%s, skip_existing=%s",
+        len(pending_symbols), total, concurrency, MAX_DOWNLOAD_THREADS, data_types, resume_from, skip_existing,
+    )
+    _append_log(logs, f"开始并发下载 {len(pending_symbols)} 只股票，并发 {concurrency}，线程上限 {MAX_DOWNLOAD_THREADS}")
+
+    state_lock = asyncio.Lock()
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+    for stock in pending_symbols:
+        queue.put_nowait(stock)
 
     def _save_state(status: str, last_symbol: str | None):
         data_store.save_download_state({
@@ -480,48 +559,74 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
             "updatedAt": datetime.now().isoformat(),
             "dataTypes": data_types,
             "logs": logs,
+            "concurrency": concurrency,
+            "maxThreads": MAX_DOWNLOAD_THREADS,
+            "runningSymbols": sorted(running_symbols),
+            "queued": queue.qsize(),
+            "completedSymbols": sorted(saved_completed_symbols),
         })
 
-    for i in range(start_idx, total):
-        if _stop_flag:
-            _append_log(logs, f"已暂停 ({completed}/{total})")
-            _save_state("paused", symbols[i - 1]["code"] if i > 0 else None)
-            logger.info("[download] paused at %s (%d/%d)", symbols[i]["code"], completed, total)
-            return
+    async def _finish_paused() -> None:
+        async with state_lock:
+            _append_log(logs, f"已暂停 ({completed}/{total})，剩余 {queue.qsize()} 只")
+            _save_state("paused", last_completed_symbol)
 
-        symbol = symbols[i]["code"]
-        name = symbols[i]["name"]
+    async def worker(worker_id: int) -> None:
+        nonlocal completed, last_completed_symbol
+        while not _stop_flag:
+            try:
+                stock = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            symbol = stock["code"]
+            name = stock.get("name", "")
+            async with state_lock:
+                running_symbols.add(symbol)
+                _save_state("running", last_completed_symbol)
+            try:
+                has_existing = data_store.has_stock_data(symbol, "profile")
+                stats = await _download_single(symbol, name, data_types, spot_df, skip_existing=skip_existing)
+                parts = [f"{DATA_TYPE_LABELS.get(data_type, data_type)}:{count}" for data_type, count in stats.items() if count > 0]
+                summary = ", ".join(parts) if parts else "无数据"
+                tag = "更新" if has_existing else "下载"
+                async with state_lock:
+                    completed += 1
+                    saved_completed_symbols.add(symbol)
+                    last_completed_symbol = symbol
+                    _append_log(logs, f"[{completed}/{total}] W{worker_id} {symbol} {name} — {tag} {summary} ✓")
+                    if completed % 50 == 0:
+                        logger.info("[download] progress: %d/%d (%.1f%%)", completed, total, completed / total * 100)
+            except Exception as e:
+                logger.error("[download] %s failed: %s", symbol, e)
+                async with state_lock:
+                    completed += 1
+                    saved_completed_symbols.add(symbol)
+                    last_completed_symbol = symbol
+                    _append_log(logs, f"[{completed}/{total}] W{worker_id} {symbol} {name} — 失败: {e}")
+                    if symbol not in failed:
+                        failed.append(symbol)
+            finally:
+                async with state_lock:
+                    running_symbols.discard(symbol)
+                    _save_state("running", last_completed_symbol)
+                queue.task_done()
+                await asyncio.sleep(0.1)
 
-        try:
-            has_existing = data_store.has_stock_data(symbol, "profile")
-            stats = await _download_single(symbol, name, data_types, spot_df)
-            completed += 1
-            # Build summary
-            parts = []
-            for dt, count in stats.items():
-                if count > 0:
-                    parts.append(f"{DATA_TYPE_LABELS.get(dt, dt)}:{count}")
-            summary = ", ".join(parts) if parts else "无数据"
-            tag = "更新" if has_existing else "下载"
-            _append_log(logs, f"[{completed}/{total}] {symbol} {name} — {tag} {summary} ✓")
-            if completed % 50 == 0:
-                logger.info("[download] progress: %d/%d (%.1f%%)", completed, total, completed / total * 100)
-        except Exception as e:
-            logger.error("[download] %s failed: %s", symbol, e)
-            completed += 1
-            _append_log(logs, f"[{completed}/{total}] {symbol} {name} — 失败: {e}")
-            if symbol not in failed:
-                failed.append(symbol)
+    if not pending_symbols:
+        _append_log(logs, f"全部完成 {completed}/{total}，失败 {len(failed)}")
+        _save_state("completed" if not failed else "error", last_completed_symbol)
+        return
 
-        # Save state after every stock so frontend gets real-time updates
-        _save_state("running", symbol)
+    workers = [asyncio.create_task(worker(index + 1)) for index in range(concurrency)]
+    await asyncio.gather(*workers)
 
-        # Rate limit
-        await asyncio.sleep(0.5)
+    if _stop_flag:
+        await _finish_paused()
+        logger.info("[download] paused: %d/%d", completed, total)
+        return
 
-    # Done
     _append_log(logs, f"全部完成 {completed}/{total}，失败 {len(failed)}")
-    _save_state("completed", symbols[-1]["code"] if symbols else None)
+    _save_state("completed" if not failed else "error", last_completed_symbol)
     logger.info("[download] completed: %d/%d, %d failed", completed, total, len(failed))
 
 
@@ -563,19 +668,21 @@ async def start_download(data_types: list[str] | None = None) -> dict:
         resume_from = state.get("lastSymbol")
         logger.info("[download] resuming from %s", resume_from)
 
+    resumed = bool(resume_from)
+
     data_store.save_download_state({
         "status": "running",
         "total": len(stock_list),
-        "completed": 0,
-        "failed": [],
-        "lastSymbol": None,
-        "startedAt": datetime.now().isoformat(),
+        "completed": state.get("completed", 0) if resumed else 0,
+        "failed": state.get("failed", []) if resumed else [],
+        "lastSymbol": resume_from if resumed else None,
+        "startedAt": state.get("startedAt", datetime.now().isoformat()) if resumed else datetime.now().isoformat(),
         "updatedAt": datetime.now().isoformat(),
         "dataTypes": data_types,
-        "logs": [],
+        "logs": state.get("logs", []) if resumed else [],
     })
 
-    _download_task = asyncio.create_task(_run_download(stock_list, data_types, resume_from))
+    _download_task = asyncio.create_task(_run_download(stock_list, data_types, resume_from, skip_existing=True))
     return {"status": "started", "total": len(stock_list), "resumeFrom": resume_from}
 
 

@@ -10,6 +10,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 import requests as http_requests
 from fastapi import HTTPException
+import pandas as pd
 
 from adapters.akshare_adapter import (
     AKShareAdapterError,
@@ -19,6 +20,8 @@ from adapters.akshare_adapter import (
     fetch_stock_info,
     fetch_stock_news,
     fetch_financial_report,
+    fetch_financial_report_em,
+    fetch_financial_indicators,
     fetch_dividend_data,
 )
 from cache.cache_manager import (
@@ -36,6 +39,11 @@ from models.stock import (
     StockProfile,
     KLineData,
     FinancialStatement,
+    FinancialPeriodMetrics,
+    FinancialScores,
+    FinancialAlert,
+    FinancialSummary,
+    FinancialStatementsResponse,
     DividendRecord,
     MarketStats,
     TechnicalIndicators,
@@ -398,11 +406,402 @@ def _assemble_financials(
     return results
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_pct(numerator: float, denominator: float) -> float:
+    if denominator == 0:
+        return 0.0
+    return round(numerator / denominator * 100, 2)
+
+
+def _report_quarter(report_date: str) -> str:
+    if report_date.endswith("03-31") or report_date.endswith("0331"):
+        return "Q1"
+    if report_date.endswith("06-30") or report_date.endswith("0630"):
+        return "H1"
+    if report_date.endswith("09-30") or report_date.endswith("0930"):
+        return "Q3"
+    return "FY"
+
+
+def _normalize_report_date(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value)
+    if " " in text:
+        text = text.split(" ")[0]
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text[:10]
+
+
+def _records_from_df(df) -> list[dict]:
+    if df is None:
+        return []
+    return json.loads(df.where(pd.notnull(df), None).to_json(orient="records", force_ascii=False, date_format="iso"))
+
+
+def _row_by_report_date(df, report_date: str):
+    if df is None or df.empty or "REPORT_DATE" not in df.columns:
+        return None
+    dates = df["REPORT_DATE"].apply(_normalize_report_date)
+    matched = df[dates == report_date]
+    if matched.empty:
+        return None
+    return matched.iloc[0]
+
+
+def _indicator_by_report_date(indicator_df, report_date: str):
+    if indicator_df is None or indicator_df.empty or "日期" not in indicator_df.columns:
+        return None
+    dates = indicator_df["日期"].apply(_normalize_report_date)
+    matched = indicator_df[dates == report_date]
+    if matched.empty:
+        return None
+    return matched.iloc[0]
+
+
+def _assemble_financial_periods(symbol: str, income_df, balance_df, cashflow_df, indicator_df=None) -> list[FinancialPeriodMetrics]:
+    if income_df is None or income_df.empty:
+        return []
+
+    periods: list[FinancialPeriodMetrics] = []
+    for _, income in income_df.iterrows():
+        report_date = _normalize_report_date(income.get("REPORT_DATE"))
+        if not report_date:
+            continue
+        try:
+            report_year = int(report_date[:4])
+        except ValueError:
+            continue
+
+        balance = _row_by_report_date(balance_df, report_date)
+        cashflow = _row_by_report_date(cashflow_df, report_date)
+        indicator = _indicator_by_report_date(indicator_df, report_date)
+
+        revenue = _safe_float(income.get("TOTAL_OPERATE_INCOME", income.get("OPERATE_INCOME")))
+        operating_cost = _safe_float(income.get("OPERATE_COST"))
+        net_profit = _safe_float(income.get("PARENT_NETPROFIT", income.get("NETPROFIT")))
+        total_assets = _safe_float(balance.get("TOTAL_ASSETS")) if balance is not None else 0.0
+        total_liabilities = _safe_float(balance.get("TOTAL_LIABILITIES")) if balance is not None else 0.0
+        equity = _safe_float(balance.get("TOTAL_PARENT_EQUITY", balance.get("TOTAL_EQUITY"))) if balance is not None else 0.0
+        operating_cashflow = _safe_float(cashflow.get("NETCASH_OPERATE")) if cashflow is not None else 0.0
+        capex = _safe_float(cashflow.get("CONSTRUCT_LONG_ASSET")) if cashflow is not None else 0.0
+        gross_profit = revenue - operating_cost if revenue and operating_cost else 0.0
+
+        periods.append(FinancialPeriodMetrics(
+            symbol=symbol,
+            reportDate=report_date,
+            reportYear=report_year,
+            reportQuarter=_report_quarter(report_date),
+            reportType=str(income.get("REPORT_TYPE", "") or ""),
+            noticeDate=_normalize_report_date(income.get("NOTICE_DATE")),
+            currency=str(income.get("CURRENCY", "CNY") or "CNY"),
+            source="eastmoney",
+            revenue=revenue,
+            revenueYoY=_safe_float(income.get("TOTAL_OPERATE_INCOME_YOY", income.get("OPERATE_INCOME_YOY"))),
+            operatingCost=operating_cost,
+            grossProfit=gross_profit,
+            grossMargin=_safe_float(indicator.get("销售毛利率(%)")) if indicator is not None else _safe_pct(gross_profit, revenue),
+            salesExpense=_safe_float(income.get("SALE_EXPENSE")),
+            manageExpense=_safe_float(income.get("MANAGE_EXPENSE")),
+            rdExpense=_safe_float(income.get("RESEARCH_EXPENSE", income.get("ME_RESEARCH_EXPENSE"))),
+            financeExpense=_safe_float(income.get("FINANCE_EXPENSE")),
+            operatingProfit=_safe_float(income.get("OPERATE_PROFIT")),
+            totalProfit=_safe_float(income.get("TOTAL_PROFIT")),
+            netProfit=net_profit,
+            netProfitYoY=_safe_float(income.get("PARENT_NETPROFIT_YOY", income.get("NETPROFIT_YOY"))),
+            deductedNetProfit=_safe_float(income.get("DEDUCT_PARENT_NETPROFIT")),
+            eps=_safe_float(income.get("BASIC_EPS")),
+            netMargin=_safe_float(indicator.get("销售净利率(%)")) if indicator is not None else _safe_pct(net_profit, revenue),
+            roe=_safe_float(indicator.get("净资产收益率(%)")) if indicator is not None else _safe_pct(net_profit, equity),
+            roa=_safe_float(indicator.get("总资产净利润率(%)")) if indicator is not None else _safe_pct(net_profit, total_assets),
+            totalAssets=total_assets,
+            totalLiabilities=total_liabilities,
+            equity=equity,
+            cash=_safe_float(balance.get("MONETARYFUNDS")) if balance is not None else 0.0,
+            accountsReceivable=_safe_float(balance.get("ACCOUNTS_RECE")) if balance is not None else 0.0,
+            inventory=_safe_float(balance.get("INVENTORY")) if balance is not None else 0.0,
+            contractLiability=_safe_float(balance.get("CONTRACT_LIAB")) if balance is not None else 0.0,
+            goodwill=_safe_float(balance.get("GOODWILL")) if balance is not None else 0.0,
+            debtAssetRatio=_safe_float(indicator.get("资产负债率(%)")) if indicator is not None else _safe_pct(total_liabilities, total_assets),
+            currentRatio=_safe_float(indicator.get("流动比率")) if indicator is not None else 0.0,
+            quickRatio=_safe_float(indicator.get("速动比率")) if indicator is not None else 0.0,
+            assetTurnover=_safe_float(indicator.get("总资产周转率(次)")) if indicator is not None else 0.0,
+            receivableTurnover=_safe_float(indicator.get("应收账款周转率(次)")) if indicator is not None else 0.0,
+            inventoryTurnover=_safe_float(indicator.get("存货周转率(次)")) if indicator is not None else 0.0,
+            operatingCashFlow=operating_cashflow,
+            operatingCashFlowYoY=_safe_float(cashflow.get("NETCASH_OPERATE_YOY")) if cashflow is not None else 0.0,
+            investingCashFlow=_safe_float(cashflow.get("NETCASH_INVEST")) if cashflow is not None else 0.0,
+            financingCashFlow=_safe_float(cashflow.get("NETCASH_FINANCE")) if cashflow is not None else 0.0,
+            capex=capex,
+            freeCashFlow=operating_cashflow - capex,
+            cfoToNetProfit=_safe_float(indicator.get("经营现金净流量与净利润的比率(%)")) if indicator is not None else _safe_pct(operating_cashflow, net_profit),
+        ))
+
+    periods.sort(key=lambda item: item.reportDate, reverse=True)
+    return periods
+
+
+def _annual_legacy_from_periods(periods: list[FinancialPeriodMetrics]) -> list[FinancialStatement]:
+    annual = [p for p in periods if p.reportQuarter == "FY"]
+    return [FinancialStatement(
+        year=p.reportYear,
+        revenue=p.revenue,
+        netProfit=p.netProfit,
+        grossMargin=p.grossMargin,
+        roe=p.roe,
+        operatingCashFlow=p.operatingCashFlow,
+        totalAssets=p.totalAssets,
+        totalLiabilities=p.totalLiabilities,
+        equity=p.equity,
+        eps=p.eps,
+        operatingProfit=p.operatingProfit,
+        totalProfitBeforeTax=p.totalProfit,
+        totalOperatingCost=p.operatingCost,
+        rdExpense=p.rdExpense,
+        financeExpense=p.financeExpense,
+        investingCashFlow=p.investingCashFlow,
+        financingCashFlow=p.financingCashFlow,
+    ) for p in annual]
+
+
+def _score_metric(value: float, good: float, okay: float, higher_is_better: bool = True) -> int:
+    if higher_is_better:
+        if value >= good:
+            return 90
+        if value >= okay:
+            return 70
+        return 45
+    if value <= good:
+        return 90
+    if value <= okay:
+        return 70
+    return 45
+
+
+def _build_financial_summary(symbol: str, periods: list[FinancialPeriodMetrics]) -> FinancialSummary:
+    latest = periods[0] if periods else None
+    annual = [p for p in periods if p.reportQuarter == "FY"][:10]
+    quarterly = periods[:12]
+    alerts: list[FinancialAlert] = []
+
+    if latest:
+        if latest.netProfit > 0 and latest.cfoToNetProfit < 50:
+            alerts.append(FinancialAlert(
+                level="warning",
+                title="利润现金含量偏低",
+                message=f"{latest.reportDate} 经营现金流/净利润为 {latest.cfoToNetProfit:.1f}%，利润转化为现金的质量需要关注。",
+                metric="cfoToNetProfit",
+                period=latest.reportDate,
+            ))
+        if latest.revenueYoY > 0 and latest.netProfitYoY < 0:
+            alerts.append(FinancialAlert(
+                level="warning",
+                title="增收不增利",
+                message=f"营收同比 {latest.revenueYoY:.1f}%，净利润同比 {latest.netProfitYoY:.1f}%，盈利弹性转弱。",
+                metric="netProfitYoY",
+                period=latest.reportDate,
+            ))
+        if latest.debtAssetRatio > 70:
+            alerts.append(FinancialAlert(
+                level="danger",
+                title="资产负债率较高",
+                message=f"资产负债率 {latest.debtAssetRatio:.1f}%，需关注杠杆和流动性压力。",
+                metric="debtAssetRatio",
+                period=latest.reportDate,
+            ))
+        if latest.goodwill > 0 and latest.equity > 0 and latest.goodwill / latest.equity > 0.2:
+            alerts.append(FinancialAlert(
+                level="warning",
+                title="商誉占比较高",
+                message="商誉超过归母权益 20%，需关注潜在减值风险。",
+                metric="goodwill",
+                period=latest.reportDate,
+            ))
+
+    if len(quarterly) >= 3:
+        recent = quarterly[:3]
+        if all(item.grossMargin > 0 for item in recent) and recent[0].grossMargin < recent[1].grossMargin < recent[2].grossMargin:
+            alerts.append(FinancialAlert(
+                level="info",
+                title="毛利率连续下降",
+                message="最近 3 期毛利率连续下降，需关注产品价格或成本压力。",
+                metric="grossMargin",
+                period=recent[0].reportDate,
+            ))
+
+    scores = FinancialScores()
+    if latest:
+        scores.growth = round((_score_metric(latest.revenueYoY, 15, 5) + _score_metric(latest.netProfitYoY, 15, 5)) / 2)
+        scores.profitability = round((_score_metric(latest.roe, 15, 8) + _score_metric(latest.netMargin, 15, 5)) / 2)
+        scores.cashflow = _score_metric(latest.cfoToNetProfit, 100, 60)
+        scores.solvency = round((_score_metric(latest.debtAssetRatio, 40, 65, False) + _score_metric(latest.currentRatio, 2, 1)) / 2)
+        scores.efficiency = _score_metric(latest.assetTurnover, 0.7, 0.3)
+        scores.shareholderReturn = 70
+        scores.total = round((scores.growth + scores.profitability + scores.cashflow + scores.solvency + scores.efficiency + scores.shareholderReturn) / 6)
+
+    return FinancialSummary(
+        symbol=symbol,
+        latestPeriod=latest,
+        annual=annual,
+        quarterly=quarterly,
+        scores=scores,
+        alerts=alerts,
+        dataSource="eastmoney+akshare",
+        updatedAt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
+
+async def get_financial_periods(symbol: str, period: str = "quarter", limit: int = 20) -> list[FinancialPeriodMetrics]:
+    local = data_store.load_stock_data(symbol, "financial_periods")
+    if isinstance(local, list) and local:
+        periods = [FinancialPeriodMetrics(**item) for item in local]
+        filtered = [p for p in periods if period != "annual" or p.reportQuarter == "FY"]
+        return filtered[:limit] if limit > 0 else filtered
+
+    income_df, balance_df, cashflow_df, indicator_df = await asyncio.gather(
+        asyncio.to_thread(fetch_financial_report_em, symbol, "income"),
+        asyncio.to_thread(fetch_financial_report_em, symbol, "balance"),
+        asyncio.to_thread(fetch_financial_report_em, symbol, "cashflow"),
+        asyncio.to_thread(fetch_financial_indicators, symbol, "2016"),
+    )
+
+    if income_df is None:
+        logger.warning("[financial_periods:%s] EastMoney missing, fallback to legacy annual reports", symbol)
+        return []
+
+    data_store.save_stock_data(symbol, "financial_income_raw", _records_from_df(income_df))
+    data_store.save_stock_data(symbol, "financial_balance_raw", _records_from_df(balance_df))
+    data_store.save_stock_data(symbol, "financial_cashflow_raw", _records_from_df(cashflow_df))
+    data_store.save_stock_data(symbol, "financial_indicator_raw", _records_from_df(indicator_df))
+
+    periods = _assemble_financial_periods(symbol, income_df, balance_df, cashflow_df, indicator_df)
+    data_store.save_stock_data(symbol, "financial_periods", [item.model_dump() for item in periods])
+    summary = _build_financial_summary(symbol, periods)
+    data_store.save_stock_data(symbol, "financial_summary", summary.model_dump())
+    data_store.save_stock_data(symbol, "financials", [item.model_dump() for item in _annual_legacy_from_periods(periods)])
+
+    filtered = [p for p in periods if period != "annual" or p.reportQuarter == "FY"]
+    return filtered[:limit] if limit > 0 else filtered
+
+
+async def get_financial_summary(symbol: str) -> FinancialSummary:
+    local = data_store.load_stock_data(symbol, "financial_summary")
+    if isinstance(local, dict) and local:
+        try:
+            return FinancialSummary(**local)
+        except Exception:
+            pass
+    periods = await get_financial_periods(symbol, "quarter", 0)
+    summary = _build_financial_summary(symbol, periods)
+    data_store.save_stock_data(symbol, "financial_summary", summary.model_dump())
+    return summary
+
+
+async def get_financial_statements(symbol: str, statement_type: str, period: str = "quarter") -> FinancialStatementsResponse:
+    data_type_map = {
+        "income": "financial_income_raw",
+        "balance": "financial_balance_raw",
+        "cashflow": "financial_cashflow_raw",
+    }
+    data_type = data_type_map.get(statement_type)
+    if data_type is None:
+        raise HTTPException(status_code=400, detail="Invalid statement type")
+    local = data_store.load_stock_data(symbol, data_type)
+    if not isinstance(local, list) or not local:
+        await get_financial_periods(symbol, "quarter", 0)
+        local = data_store.load_stock_data(symbol, data_type)
+    rows = local if isinstance(local, list) else []
+    if period == "annual":
+        rows = [row for row in rows if _report_quarter(_normalize_report_date(row.get("REPORT_DATE"))) == "FY"]
+    return FinancialStatementsResponse(symbol=symbol, statementType=statement_type, rows=rows)
+
+
+async def get_financial_ratios(symbol: str, period: str = "quarter", limit: int = 20) -> list[dict]:
+    periods = await get_financial_periods(symbol, period, limit)
+    return [{
+        "reportDate": item.reportDate,
+        "reportQuarter": item.reportQuarter,
+        "grossMargin": item.grossMargin,
+        "netMargin": item.netMargin,
+        "roe": item.roe,
+        "roa": item.roa,
+        "debtAssetRatio": item.debtAssetRatio,
+        "currentRatio": item.currentRatio,
+        "quickRatio": item.quickRatio,
+        "assetTurnover": item.assetTurnover,
+        "receivableTurnover": item.receivableTurnover,
+        "inventoryTurnover": item.inventoryTurnover,
+        "cfoToNetProfit": item.cfoToNetProfit,
+    } for item in periods]
+
+
+async def get_financial_valuation(symbol: str) -> dict:
+    profile, summary = await asyncio.gather(
+        get_stock_profile(symbol),
+        get_financial_summary(symbol),
+    )
+    latest = summary.latestPeriod
+    market_cap = profile.marketCap
+    revenue = latest.revenue if latest else 0.0
+    net_profit = latest.netProfit if latest else 0.0
+    operating_cashflow = latest.operatingCashFlow if latest else 0.0
+    return {
+        "symbol": symbol,
+        "reportDate": latest.reportDate if latest else "",
+        "marketCap": market_cap,
+        "pe": profile.pe,
+        "pb": profile.pb,
+        "ps": round(market_cap / revenue, 2) if revenue else 0.0,
+        "pcf": round(market_cap / operating_cashflow, 2) if operating_cashflow else 0.0,
+        "earningsYield": _safe_pct(net_profit, market_cap),
+        "dividendYield": profile.dividendYield,
+        "eps": latest.eps if latest else 0.0,
+        "score": summary.scores.total,
+        "dataSource": "spot+financial_summary",
+    }
+
+
+async def get_financial_alerts(symbol: str) -> list[FinancialAlert]:
+    summary = await get_financial_summary(symbol)
+    return summary.alerts
+
+
+async def get_financial_peers(symbol: str) -> dict:
+    profile, summary = await asyncio.gather(
+        get_stock_profile(symbol),
+        get_financial_summary(symbol),
+    )
+    latest = summary.latestPeriod
+    return {
+        "symbol": symbol,
+        "industry": profile.industry,
+        "self": latest.model_dump() if latest else None,
+        "benchmarks": [],
+        "note": "已返回本公司标准指标；行业基准需先批量下载同行财务数据后计算。",
+    }
+
+
 async def get_financials(symbol: str) -> list[FinancialStatement]:
     cache_key = f"financials:{symbol}"
     if cache_key in financials_cache:
         logger.info("[financials:%s] cache HIT → %d records", symbol, len(financials_cache[cache_key]))
         return financials_cache[cache_key]
+
+    periods_local = data_store.load_stock_data(symbol, "financial_periods")
+    if isinstance(periods_local, list) and periods_local:
+        periods = [FinancialPeriodMetrics(**item) for item in periods_local]
+        result = _annual_legacy_from_periods(periods)
+        financials_cache[cache_key] = result
+        return result
 
     # Try local data store first
     local = data_store.load_stock_data(symbol, "financials")
@@ -411,6 +810,15 @@ async def get_financials(symbol: str) -> list[FinancialStatement]:
         result = [FinancialStatement(**item) for item in local]
         financials_cache[cache_key] = result
         return result
+
+    try:
+        periods = await get_financial_periods(symbol, "annual", 0)
+        result = _annual_legacy_from_periods(periods)
+        if result:
+            financials_cache[cache_key] = result
+            return result
+    except Exception as e:
+        logger.warning("[financials:%s] new financial periods failed, fallback legacy: %s", symbol, e)
 
     logger.info("[financials:%s] cache MISS — fetching 3 reports in parallel...", symbol)
     t0 = time.time()

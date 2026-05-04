@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Server
     host: str = "127.0.0.1"
-    port: int = 888
+    port: int = 1335
 
     model_config = {"env_prefix": "STOCK_", "env_file": ".env"}
 

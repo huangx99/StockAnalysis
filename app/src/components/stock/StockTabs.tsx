@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight, RotateCw, Search, Calendar } from 'lucide-react'
-import type { KLineData, FinancialStatement, DividendRecord, StockDocument, MarketStats, TechnicalIndicators, NewsAnalysis } from '@/types'
+import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight, RotateCw, Search, Calendar, AlertTriangle, CheckCircle2, Activity, ShieldCheck } from 'lucide-react'
+import type { KLineData, FinancialStatement, FinancialSummary, FinancialPeriodMetrics, DividendRecord, StockDocument, MarketStats, TechnicalIndicators, NewsAnalysis } from '@/types'
 import FinancialTable from '@/components/financial/FinancialTable'
 import FinancialTrendChart from '@/components/financial/FinancialTrendChart'
 import DividendTable from '@/components/financial/DividendTable'
@@ -13,6 +13,8 @@ interface StockTabsProps {
   symbol: string
   klineData: KLineData[]
   financials: FinancialStatement[]
+  financialPeriods: FinancialPeriodMetrics[]
+  financialSummary: FinancialSummary | null
   dividends: DividendRecord[]
   news: StockDocument[]
   marketStats: MarketStats | null
@@ -145,7 +147,140 @@ function MarketAnalysisTab({ stats, indicators, loading }: { stats: MarketStats 
   )
 }
 
-function FinancialAnalysisTab({ data, dividends, loading }: { data: FinancialStatement[]; dividends: DividendRecord[]; loading: boolean }) {
+type FinancialSubTab = 'overview' | 'statements' | 'trends' | 'dividends'
+
+function formatMoney(value: number): string {
+  if (!value || Number.isNaN(value)) return '—'
+  const abs = Math.abs(value)
+  if (abs >= 100000000) return `${(value / 100000000).toFixed(1)}亿`
+  if (abs >= 10000) return `${(value / 10000).toFixed(0)}万`
+  return value.toFixed(0)
+}
+
+function formatPct(value: number): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${value.toFixed(1)}%`
+}
+
+function ScorePill({ label, value }: { label: string; value: number }) {
+  const color = value >= 80 ? 'var(--success)' : value >= 60 ? 'var(--warning)' : 'var(--danger)'
+  return (
+    <div className="rounded-lg border border-border-subtle px-3 py-2" style={{ backgroundColor: 'var(--bg-base)' }}>
+      <div className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
+      <div className="font-data-md" style={{ color }}>{value || '—'}</div>
+    </div>
+  )
+}
+
+function MetricCard({ label, value, hint, positive }: { label: string; value: string; hint?: string; positive?: boolean }) {
+  return (
+    <div className="rounded-lg border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-base)' }}>
+      <div className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
+      <div className="font-data-md" style={{ color: positive == null ? 'var(--text-primary)' : positive ? 'var(--up-red)' : 'var(--down-green)' }}>{value}</div>
+      {hint && <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{hint}</div>}
+    </div>
+  )
+}
+
+function FinancialHealthOverview({ summary }: { summary: FinancialSummary }) {
+  const latest = summary.latestPeriod
+  if (!latest) return <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>暂无财务摘要</div>
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4">
+        <div className="rounded-xl border border-border-subtle p-4 flex flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg-base)' }}>
+          <Activity className="w-6 h-6 mb-2" style={{ color: 'var(--accent-secondary)' }} />
+          <div className="font-data-lg" style={{ color: 'var(--accent-secondary)' }}>{summary.scores.total || '—'}</div>
+          <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>财务健康总分</div>
+          <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{latest.reportDate} · {latest.reportType || latest.reportQuarter}</div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <ScorePill label="成长" value={summary.scores.growth} />
+          <ScorePill label="盈利" value={summary.scores.profitability} />
+          <ScorePill label="现金流" value={summary.scores.cashflow} />
+          <ScorePill label="偿债" value={summary.scores.solvency} />
+          <ScorePill label="效率" value={summary.scores.efficiency} />
+          <ScorePill label="股东回报" value={summary.scores.shareholderReturn} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <MetricCard label="营业收入" value={formatMoney(latest.revenue)} hint={`YoY ${formatPct(latest.revenueYoY)}`} positive={latest.revenueYoY >= 0} />
+        <MetricCard label="归母净利润" value={formatMoney(latest.netProfit)} hint={`YoY ${formatPct(latest.netProfitYoY)}`} positive={latest.netProfitYoY >= 0} />
+        <MetricCard label="毛利率 / 净利率" value={`${formatPct(latest.grossMargin)} / ${formatPct(latest.netMargin)}`} />
+        <MetricCard label="ROE / ROA" value={`${formatPct(latest.roe)} / ${formatPct(latest.roa)}`} />
+        <MetricCard label="经营现金流" value={formatMoney(latest.operatingCashFlow)} hint={`现金含量 ${formatPct(latest.cfoToNetProfit)}`} positive={latest.cfoToNetProfit >= 80} />
+        <MetricCard label="自由现金流" value={formatMoney(latest.freeCashFlow)} positive={latest.freeCashFlow >= 0} />
+        <MetricCard label="资产负债率" value={formatPct(latest.debtAssetRatio)} positive={latest.debtAssetRatio <= 65} />
+        <MetricCard label="流动 / 速动比率" value={`${latest.currentRatio?.toFixed(2) || '—'} / ${latest.quickRatio?.toFixed(2) || '—'}`} />
+      </div>
+
+      <div>
+        <h3 className="font-h3 text-base mb-3" style={{ color: 'var(--text-primary)' }}>风险预警</h3>
+        {summary.alerts.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-lg border border-border-subtle px-4 py-3" style={{ backgroundColor: 'var(--bg-base)', color: 'var(--success)' }}>
+            <CheckCircle2 className="w-4 h-4" />
+            <span className="text-sm">暂未触发财务异常规则</span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {summary.alerts.map((alert, index) => (
+              <div key={index} className="flex gap-3 rounded-lg border border-border-subtle px-4 py-3" style={{ backgroundColor: 'var(--bg-base)' }}>
+                {alert.level === 'danger' ? <AlertTriangle className="w-4 h-4 mt-0.5" style={{ color: 'var(--danger)' }} /> : <ShieldCheck className="w-4 h-4 mt-0.5" style={{ color: 'var(--warning)' }} />}
+                <div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{alert.title}</div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{alert.message}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PeriodMetricsTable({ data }: { data: FinancialPeriodMetrics[] }) {
+  if (data.length === 0) return <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>暂无分期财务数据</div>
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+        共 {data.length} 期，范围 {data[data.length - 1]?.reportDate} 至 {data[0]?.reportDate}
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-border-subtle">
+        <table className="w-full text-left min-w-[980px]">
+        <thead>
+          <tr style={{ backgroundColor: 'var(--bg-surface-hover)' }}>
+            {['报告期', '营收', '营收YoY', '归母净利', '净利YoY', '毛利率', 'ROE', 'CFO', 'FCF', '资产负债率'].map((item) => (
+              <th key={item} className="font-label px-4 py-3 text-right first:text-left" style={{ color: 'var(--text-secondary)' }}>{item}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.reportDate} className="border-b border-border-subtle hover:bg-bg-surface-hover transition-colors">
+              <td className="font-data-sm px-4 py-3" style={{ color: 'var(--text-primary)' }}>{row.reportDate} {row.reportQuarter}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatMoney(row.revenue)}</td>
+              <td className="font-data-sm px-4 py-3 text-right" style={{ color: row.revenueYoY >= 0 ? 'var(--up-red)' : 'var(--down-green)' }}>{formatPct(row.revenueYoY)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatMoney(row.netProfit)}</td>
+              <td className="font-data-sm px-4 py-3 text-right" style={{ color: row.netProfitYoY >= 0 ? 'var(--up-red)' : 'var(--down-green)' }}>{formatPct(row.netProfitYoY)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatPct(row.grossMargin)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatPct(row.roe)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatMoney(row.operatingCashFlow)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatMoney(row.freeCashFlow)}</td>
+              <td className="font-data-sm px-4 py-3 text-right">{formatPct(row.debtAssetRatio)}</td>
+            </tr>
+          ))}
+        </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function FinancialAnalysisTab({ data, periods, summary, dividends, loading }: { data: FinancialStatement[]; periods: FinancialPeriodMetrics[]; summary: FinancialSummary | null; dividends: DividendRecord[]; loading: boolean }) {
+  const [subTab, setSubTab] = useState<FinancialSubTab>('overview')
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -154,21 +289,39 @@ function FinancialAnalysisTab({ data, dividends, loading }: { data: FinancialSta
     )
   }
 
+  const subTabs: { key: FinancialSubTab; label: string }[] = [
+    { key: 'overview', label: '财务体检' },
+    { key: 'statements', label: '分期指标' },
+    { key: 'trends', label: '趋势分析' },
+    { key: 'dividends', label: '分红配送' },
+  ]
+
   return (
     <div className="flex flex-col gap-6">
-      <FinancialTable data={data} />
-      <div className="mt-2">
-        <h3 className="font-h3 text-base mb-3" style={{ color: 'var(--text-primary)' }}>趋势分析</h3>
+      <div className="flex flex-wrap gap-2">
+        {subTabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setSubTab(tab.key)}
+            className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+            style={{ backgroundColor: subTab === tab.key ? 'var(--accent-primary)' : 'var(--bg-base)', color: subTab === tab.key ? '#fff' : 'var(--text-secondary)' }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {subTab === 'overview' && (summary ? <FinancialHealthOverview summary={summary} /> : <FinancialTable data={data} />)}
+      {subTab === 'statements' && <PeriodMetricsTable data={periods.length > 0 ? periods : summary?.quarterly ?? []} />}
+      {subTab === 'trends' && (
         <div className="rounded-xl border border-border-subtle p-4" style={{ backgroundColor: 'var(--bg-base)' }}>
           <FinancialTrendChart data={data} />
         </div>
-      </div>
-      <div className="mt-2">
-        <h3 className="font-h3 text-base mb-3" style={{ color: 'var(--text-primary)' }}>分红配送</h3>
+      )}
+      {subTab === 'dividends' && (
         <div className="rounded-xl border border-border-subtle p-4" style={{ backgroundColor: 'var(--bg-base)' }}>
           <DividendTable data={dividends} />
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -475,7 +628,7 @@ function NewsTab({ docs, loading, symbol, savedAnalysisMap, onAnalysisDone }: {
   )
 }
 
-export default function StockTabs({ symbol, klineData: _klineData, financials, dividends, news, marketStats, technicalIndicators, loading }: StockTabsProps) {
+export default function StockTabs({ symbol, klineData: _klineData, financials, financialPeriods, financialSummary, dividends, news, marketStats, technicalIndicators, loading }: StockTabsProps) {
   const [activeTab, setActiveTab] = useState<'market' | 'financial' | 'news'>('market')
 
   // Persist AI news analyses in localStorage
@@ -552,7 +705,7 @@ export default function StockTabs({ symbol, klineData: _klineData, financials, d
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              <FinancialAnalysisTab data={financials} dividends={dividends ?? []} loading={loading.financials} />
+              <FinancialAnalysisTab data={financials} periods={financialPeriods} summary={financialSummary} dividends={dividends ?? []} loading={loading.financials} />
             </motion.div>
           )}
           {activeTab === 'news' && (

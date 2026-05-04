@@ -11,7 +11,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:888',
+        target: 'http://127.0.0.1:1335',
         changeOrigin: true,
       },
     },
