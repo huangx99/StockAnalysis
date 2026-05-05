@@ -1,13 +1,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight, RotateCw, Search, Calendar, AlertTriangle, CheckCircle2, Activity, ShieldCheck } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCw, Search, Calendar } from 'lucide-react'
 import type { KLineData, FinancialStatement, FinancialSummary, FinancialPeriodMetrics, DividendRecord, StockDocument, MarketStats, TechnicalIndicators, NewsAnalysis } from '@/types'
 import FinancialTable from '@/components/financial/FinancialTable'
-import FinancialTrendChart from '@/components/financial/FinancialTrendChart'
 import DividendTable from '@/components/financial/DividendTable'
 import NewsTimeline from '@/components/news/NewsTimeline'
-import MetricTooltip from '@/components/common/MetricTooltip'
 import { refreshNews } from '@/api/real/stockApi'
+import { FinancialChartWorkspace, MarketChartWorkspace, NewsChartWorkspace } from '@/components/stock/StockChartWorkspace'
 
 interface StockTabsProps {
   symbol: string
@@ -33,7 +32,7 @@ const tabs = [
   { key: 'news', label: '公告新闻' },
 ]
 
-function MarketAnalysisTab({ stats, indicators, loading }: { stats: MarketStats | null; indicators: TechnicalIndicators | null; loading: boolean }) {
+function MarketAnalysisTab({ klineData, stats, indicators, loading }: { klineData: KLineData[]; stats: MarketStats | null; indicators: TechnicalIndicators | null; loading: boolean }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -42,112 +41,8 @@ function MarketAnalysisTab({ stats, indicators, loading }: { stats: MarketStats 
     )
   }
 
-  if (!stats) {
-    return <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>暂无统计数据</div>
-  }
-
-  const statsItems = [
-    { label: <MetricTooltip label="近5日涨跌幅" />, value: stats.change5d },
-    { label: <MetricTooltip label="近20日涨跌幅" />, value: stats.change20d },
-    { label: <MetricTooltip label="近60日涨跌幅" />, value: stats.change60d },
-    { label: <MetricTooltip label="年初至今" />, value: stats.changeYtd },
-    { label: <MetricTooltip label="波动率(20日)" />, value: stats.volatility },
-    { label: <MetricTooltip label="最大回撤" />, value: stats.maxDrawdown },
-  ]
-
-  const signalColor = (s: string) => {
-    if (s.includes('多') || s.includes('偏多') || s.includes('偏强')) return 'up'
-    if (s.includes('空') || s.includes('偏空') || s.includes('偏弱')) return 'down'
-    return 'neutral'
-  }
-
-  const techRows = indicators ? [
-    { name: <MetricTooltip label="均线系统" />, value: indicators.maSignal, signal: indicators.maSignal, signalType: signalColor(indicators.maSignal), desc: indicators.maDesc },
-    { name: <MetricTooltip label="MACD" />, value: `${indicators.macdDif.toFixed(3)}`, signal: indicators.macdSignal, signalType: signalColor(indicators.macdSignal), desc: indicators.macdDesc },
-    { name: <MetricTooltip label="RSI(14)" />, value: indicators.rsiValue.toFixed(1), signal: indicators.rsiSignal, signalType: indicators.rsiValue >= 70 ? 'down' : indicators.rsiValue <= 30 ? 'up' : 'neutral', desc: indicators.rsiDesc },
-    { name: <MetricTooltip label="布林带" />, value: indicators.bollingerPosition, signal: indicators.bollingerSignal, signalType: signalColor(indicators.bollingerSignal), desc: indicators.bollingerDesc },
-  ] : []
-
-  return (
-    <div className="flex flex-col gap-6">
-      {/* Performance stats */}
-      <div className="flex flex-wrap gap-4">
-        {statsItems.map((item, i) => {
-          const isUp = item.value >= 0
-          return (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: i * 0.06 }}
-              className="flex flex-col gap-1 px-4 py-3 rounded-lg border border-border-subtle min-w-[140px]"
-              style={{ backgroundColor: 'var(--bg-base)' }}
-            >
-              <span className="font-label" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-              <div className="flex items-center gap-1">
-                {isUp ? (
-                  <ArrowUpRight className="w-3.5 h-3.5" style={{ color: 'var(--up-red)' }} />
-                ) : (
-                  <ArrowDownRight className="w-3.5 h-3.5" style={{ color: 'var(--down-green)' }} />
-                )}
-                <span className="font-data-md tabular-nums" style={{ color: isUp ? 'var(--up-red)' : 'var(--down-green)' }}>
-                  {isUp ? '+' : ''}{item.value.toFixed(2)}%
-                </span>
-              </div>
-            </motion.div>
-          )
-        })}
-      </div>
-
-      {/* Technical summary table */}
-      {techRows.length > 0 && (
-        <div>
-          <h3 className="font-h3 text-base mb-3" style={{ color: 'var(--text-primary)' }}>技术指标</h3>
-          <div className="overflow-x-auto rounded-lg border border-border-subtle">
-            <table className="w-full text-left">
-              <thead>
-                <tr style={{ backgroundColor: 'var(--bg-surface-hover)' }}>
-                  <th className="font-label px-4 py-3" style={{ color: 'var(--text-secondary)' }}>指标</th>
-                  <th className="font-label px-4 py-3 text-right" style={{ color: 'var(--text-secondary)' }}>数值</th>
-                  <th className="font-label px-4 py-3 text-center" style={{ color: 'var(--text-secondary)' }}>信号</th>
-                  <th className="font-label px-4 py-3" style={{ color: 'var(--text-secondary)' }}>说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                {techRows.map((row, i) => (
-                  <motion.tr
-                    key={i}
-                    initial={{ opacity: 0, y: 5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                    className="border-b border-border-subtle hover:bg-bg-surface-hover transition-colors"
-                  >
-                    <td className="font-body text-sm px-4 py-2.5" style={{ color: 'var(--text-primary)' }}>{row.name}</td>
-                    <td className="font-data-sm px-4 py-2.5 text-right" style={{ color: 'var(--text-primary)' }}>{row.value}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <span
-                        className="font-label px-2 py-0.5 rounded"
-                        style={{
-                          backgroundColor: row.signalType === 'up' ? 'var(--up-red)26' : row.signalType === 'down' ? 'var(--down-green)26' : 'var(--warning)26',
-                          color: row.signalType === 'up' ? 'var(--up-red)' : row.signalType === 'down' ? 'var(--down-green)' : 'var(--warning)',
-                        }}
-                      >
-                        {row.signal}
-                      </span>
-                    </td>
-                    <td className="font-body text-sm px-4 py-2.5" style={{ color: 'var(--text-secondary)' }}>{row.desc}</td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  )
+  return <MarketChartWorkspace klineData={klineData} stats={stats} indicators={indicators} />
 }
-
-type FinancialSubTab = 'overview' | 'statements' | 'trends' | 'dividends'
 
 function formatMoney(value: number): string {
   if (!value || Number.isNaN(value)) return '—'
@@ -160,85 +55,6 @@ function formatMoney(value: number): string {
 function formatPct(value: number): string {
   if (value == null || Number.isNaN(value)) return '—'
   return `${value.toFixed(1)}%`
-}
-
-function ScorePill({ label, value }: { label: string; value: number }) {
-  const color = value >= 80 ? 'var(--success)' : value >= 60 ? 'var(--warning)' : 'var(--danger)'
-  return (
-    <div className="rounded-lg border border-border-subtle px-3 py-2" style={{ backgroundColor: 'var(--bg-base)' }}>
-      <div className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
-      <div className="font-data-md" style={{ color }}>{value || '—'}</div>
-    </div>
-  )
-}
-
-function MetricCard({ label, value, hint, positive }: { label: string; value: string; hint?: string; positive?: boolean }) {
-  return (
-    <div className="rounded-lg border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-base)' }}>
-      <div className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
-      <div className="font-data-md" style={{ color: positive == null ? 'var(--text-primary)' : positive ? 'var(--up-red)' : 'var(--down-green)' }}>{value}</div>
-      {hint && <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{hint}</div>}
-    </div>
-  )
-}
-
-function FinancialHealthOverview({ summary }: { summary: FinancialSummary }) {
-  const latest = summary.latestPeriod
-  if (!latest) return <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>暂无财务摘要</div>
-
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4">
-        <div className="rounded-xl border border-border-subtle p-4 flex flex-col items-center justify-center" style={{ backgroundColor: 'var(--bg-base)' }}>
-          <Activity className="w-6 h-6 mb-2" style={{ color: 'var(--accent-secondary)' }} />
-          <div className="font-data-lg" style={{ color: 'var(--accent-secondary)' }}>{summary.scores.total || '—'}</div>
-          <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>财务健康总分</div>
-          <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{latest.reportDate} · {latest.reportType || latest.reportQuarter}</div>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <ScorePill label="成长" value={summary.scores.growth} />
-          <ScorePill label="盈利" value={summary.scores.profitability} />
-          <ScorePill label="现金流" value={summary.scores.cashflow} />
-          <ScorePill label="偿债" value={summary.scores.solvency} />
-          <ScorePill label="效率" value={summary.scores.efficiency} />
-          <ScorePill label="股东回报" value={summary.scores.shareholderReturn} />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard label="营业收入" value={formatMoney(latest.revenue)} hint={`YoY ${formatPct(latest.revenueYoY)}`} positive={latest.revenueYoY >= 0} />
-        <MetricCard label="归母净利润" value={formatMoney(latest.netProfit)} hint={`YoY ${formatPct(latest.netProfitYoY)}`} positive={latest.netProfitYoY >= 0} />
-        <MetricCard label="毛利率 / 净利率" value={`${formatPct(latest.grossMargin)} / ${formatPct(latest.netMargin)}`} />
-        <MetricCard label="ROE / ROA" value={`${formatPct(latest.roe)} / ${formatPct(latest.roa)}`} />
-        <MetricCard label="经营现金流" value={formatMoney(latest.operatingCashFlow)} hint={`现金含量 ${formatPct(latest.cfoToNetProfit)}`} positive={latest.cfoToNetProfit >= 80} />
-        <MetricCard label="自由现金流" value={formatMoney(latest.freeCashFlow)} positive={latest.freeCashFlow >= 0} />
-        <MetricCard label="资产负债率" value={formatPct(latest.debtAssetRatio)} positive={latest.debtAssetRatio <= 65} />
-        <MetricCard label="流动 / 速动比率" value={`${latest.currentRatio?.toFixed(2) || '—'} / ${latest.quickRatio?.toFixed(2) || '—'}`} />
-      </div>
-
-      <div>
-        <h3 className="font-h3 text-base mb-3" style={{ color: 'var(--text-primary)' }}>风险预警</h3>
-        {summary.alerts.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg border border-border-subtle px-4 py-3" style={{ backgroundColor: 'var(--bg-base)', color: 'var(--success)' }}>
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-sm">暂未触发财务异常规则</span>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {summary.alerts.map((alert, index) => (
-              <div key={index} className="flex gap-3 rounded-lg border border-border-subtle px-4 py-3" style={{ backgroundColor: 'var(--bg-base)' }}>
-                {alert.level === 'danger' ? <AlertTriangle className="w-4 h-4 mt-0.5" style={{ color: 'var(--danger)' }} /> : <ShieldCheck className="w-4 h-4 mt-0.5" style={{ color: 'var(--warning)' }} />}
-                <div>
-                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{alert.title}</div>
-                  <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{alert.message}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
 }
 
 function PeriodMetricsTable({ data }: { data: FinancialPeriodMetrics[] }) {
@@ -279,8 +95,20 @@ function PeriodMetricsTable({ data }: { data: FinancialPeriodMetrics[] }) {
   )
 }
 
+function RawDetails({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  return (
+    <details open={defaultOpen} className="rounded-xl border border-border-subtle" style={{ backgroundColor: 'var(--bg-base)' }}>
+      <summary className="cursor-pointer px-4 py-3 font-h3 text-sm" style={{ color: 'var(--text-primary)' }}>
+        {title}
+      </summary>
+      <div className="border-t border-border-subtle p-4">
+        {children}
+      </div>
+    </details>
+  )
+}
+
 function FinancialAnalysisTab({ data, periods, summary, dividends, loading }: { data: FinancialStatement[]; periods: FinancialPeriodMetrics[]; summary: FinancialSummary | null; dividends: DividendRecord[]; loading: boolean }) {
-  const [subTab, setSubTab] = useState<FinancialSubTab>('overview')
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -289,39 +117,27 @@ function FinancialAnalysisTab({ data, periods, summary, dividends, loading }: { 
     )
   }
 
-  const subTabs: { key: FinancialSubTab; label: string }[] = [
-    { key: 'overview', label: '财务体检' },
-    { key: 'statements', label: '分期指标' },
-    { key: 'trends', label: '趋势分析' },
-    { key: 'dividends', label: '分红配送' },
-  ]
+  const periodRows = periods.length > 0 ? periods : summary?.quarterly ?? []
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap gap-2">
-        {subTabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setSubTab(tab.key)}
-            className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-            style={{ backgroundColor: subTab === tab.key ? 'var(--accent-primary)' : 'var(--bg-base)', color: subTab === tab.key ? '#fff' : 'var(--text-secondary)' }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      {subTab === 'overview' && (summary ? <FinancialHealthOverview summary={summary} /> : <FinancialTable data={data} />)}
-      {subTab === 'statements' && <PeriodMetricsTable data={periods.length > 0 ? periods : summary?.quarterly ?? []} />}
-      {subTab === 'trends' && (
-        <div className="rounded-xl border border-border-subtle p-4" style={{ backgroundColor: 'var(--bg-base)' }}>
-          <FinancialTrendChart data={data} />
+    <div className="flex flex-col gap-8">
+      <FinancialChartWorkspace data={data} periods={periodRows} summary={summary} dividends={dividends} />
+
+      <section className="flex flex-col gap-3">
+        <div>
+          <h3 className="font-h3 text-lg" style={{ color: 'var(--text-primary)' }}>原始数据表格</h3>
+          <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>图表用于分析，表格保留在最下方用于核对具体数值。</p>
         </div>
-      )}
-      {subTab === 'dividends' && (
-        <div className="rounded-xl border border-border-subtle p-4" style={{ backgroundColor: 'var(--bg-base)' }}>
+        <RawDetails title="年度财务指标明细">
+          <FinancialTable data={data} />
+        </RawDetails>
+        <RawDetails title="分期财务指标明细">
+          <PeriodMetricsTable data={periodRows} />
+        </RawDetails>
+        <RawDetails title="分红配送明细">
           <DividendTable data={dividends} />
-        </div>
-      )}
+        </RawDetails>
+      </section>
     </div>
   )
 }
@@ -464,7 +280,9 @@ function NewsTab({ docs, loading, symbol, savedAnalysisMap, onAnalysisDone }: {
 
   return (
     <div className="py-2">
-      {/* Filter bar */}
+      <NewsChartWorkspace docs={docs} />
+
+      {/* 原始资讯列表与筛选 */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-4">
         <div className="flex items-center gap-1">
           {['全部', '公告', '新闻', '研报'].map((f) => (
@@ -694,7 +512,7 @@ export default function StockTabs({ symbol, klineData: _klineData, financials, f
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              <MarketAnalysisTab stats={marketStats} indicators={technicalIndicators} loading={loading.stats} />
+              <MarketAnalysisTab klineData={_klineData} stats={marketStats} indicators={technicalIndicators} loading={loading.stats} />
             </motion.div>
           )}
           {activeTab === 'financial' && (
