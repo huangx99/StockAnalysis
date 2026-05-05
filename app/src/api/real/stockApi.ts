@@ -18,6 +18,11 @@ import type {
   NewsAnalysis,
   MarketDownloadStatus,
   MarketDataSummary,
+  ScreenerRequest,
+  ScreenerResponse,
+  ScreenerInsight,
+  FormulaFieldMeta,
+  FormulaGenerateResponse,
 } from '../../types';
 
 const BASE = '/api';
@@ -208,8 +213,18 @@ export async function getDataStocks(
   page = 1,
   pageSize = 50,
   query = '',
+  missingOnly = false,
 ): Promise<DataStocksResponse> {
-  return request(`${BASE}/system/data-stocks?page=${page}&pageSize=${pageSize}&q=${encodeURIComponent(query)}`);
+  return request(`${BASE}/system/data-stocks?page=${page}&pageSize=${pageSize}&q=${encodeURIComponent(query)}&missingOnly=${missingOnly}`);
+}
+
+export async function rebuildDataStocks(
+  page = 1,
+  pageSize = 50,
+  query = '',
+  missingOnly = false,
+): Promise<DataStocksResponse> {
+  return request(`${BASE}/system/data-stocks/rebuild?page=${page}&pageSize=${pageSize}&q=${encodeURIComponent(query)}&missingOnly=${missingOnly}`, { method: 'POST' });
 }
 
 export async function startDataDownload(): Promise<{ status: string; total?: number }> {
@@ -226,6 +241,10 @@ export async function resetDataStatus(): Promise<{ status: string }> {
 
 export async function refreshStockData(symbol: string): Promise<{ status: string; message: string }> {
   return request(`${BASE}/system/data/refresh/${symbol}`, { method: 'POST' });
+}
+
+export async function refreshMissingStockData(symbol: string): Promise<{ status: string; message: string; missingDataTypes?: string[]; fixedDataTypes?: string[]; stillMissingDataTypes?: string[]; stats?: Record<string, number> }> {
+  return request(`${BASE}/system/data/refresh-missing/${symbol}`, { method: 'POST' });
 }
 
 export async function downloadStockData(symbol: string): Promise<{ status: string; symbol: string; name?: string; message?: string }> {
@@ -376,4 +395,44 @@ export async function deleteMarketData(tradeDate: string): Promise<{ status: str
 
 export async function getMarketDataDetail<T = unknown>(tradeDate: string, dataType: string): Promise<{ tradeDate: string; dataType: string; data: T | null; error?: string }> {
   return request(`${BASE}/system/market-data/${tradeDate}/${dataType}`);
+}
+
+export async function runScreener(params: ScreenerRequest): Promise<ScreenerResponse> {
+  return request(`${BASE}/screener/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getFormulaFields(): Promise<{ items: FormulaFieldMeta[] }> {
+  return request(`${BASE}/screener/formula/fields`);
+}
+
+export async function validateFormula(formula: string): Promise<{ ok: boolean; message: string }> {
+  return request(`${BASE}/screener/formula/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ formula }),
+  });
+}
+
+export async function generateFormula(description: string): Promise<FormulaGenerateResponse> {
+  return request(`${BASE}/screener/formula/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+  });
+}
+
+export async function generateScreenerAiInsight(
+  params: ScreenerRequest,
+  fetchLinks = false,
+  forceRefresh = false,
+): Promise<ScreenerInsight> {
+  return request(`${BASE}/screener/insight/ai`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ screenerRequest: params, fetchLinks, forceRefresh }),
+  });
 }

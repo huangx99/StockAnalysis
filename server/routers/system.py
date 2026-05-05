@@ -1,4 +1,6 @@
 import json
+from collections import Counter
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +14,45 @@ from services import market_data_store
 from services import market_downloader
 
 router = APIRouter(prefix="/api", tags=["system"])
+
+LOCAL_DATA_TYPE_LABELS = {
+    "profile": "基本信息",
+    "kline_day": "日K线",
+    "kline_week": "周K线",
+    "kline_month": "月K线",
+    "financials": "财务数据",
+    "news": "新闻公告",
+    "dividends": "分红",
+    "notices": "公告",
+    "reports": "研报",
+}
+REQUIRED_LOCAL_DATA_TYPES = tuple(LOCAL_DATA_TYPE_LABELS.keys())
+
+
+def _get_missing_data_types(stock: dict) -> list[str]:
+    data_types = stock.get("dataTypes") or {}
+    return [
+        data_type
+        for data_type in REQUIRED_LOCAL_DATA_TYPES
+        if not (data_types.get(data_type) or {}).get("exists")
+    ]
+
+
+@lru_cache(maxsize=1)
+def _load_stock_name_map() -> dict[str, str]:
+    stock_list_path = Path(__file__).parent.parent / "data" / "stock_list.json"
+    name_map: dict[str, str] = {}
+    if stock_list_path.exists():
+        try:
+            with open(stock_list_path, "r", encoding="utf-8") as f:
+                for item in json.load(f):
+                    code = str(item.get("code", ""))
+                    name = str(item.get("name", ""))
+                    if code:
+                        name_map[code] = name
+        except Exception:
+            pass
+    return name_map
 
 
 @router.get("/system/status", response_model=SystemStatus)
@@ -84,32 +125,24 @@ async def data_reset():
     return {"status": "ok"}
 
 
-@router.get("/system/data-stocks")
-async def data_stocks(
-    page: int = Query(1, ge=1),
-    pageSize: int = Query(50, ge=1, le=200),
-    q: str = Query("", description="Search by symbol or name"),
+def _format_data_stocks_response(
+    all_stocks: list[dict],
+    page: int,
+    pageSize: int,
+    q: str,
+    missingOnly: bool = False,
 ):
-    all_stocks = data_store.list_stocks_with_data()
+    name_map = _load_stock_name_map()
 
-    # Load stock names
-    from pathlib import Path
-    import json
-    stock_list_path = Path(__file__).parent.parent / "data" / "stock_list.json"
-    name_map = {}
-    if stock_list_path.exists():
-        try:
-            with open(stock_list_path, "r", encoding="utf-8") as f:
-                for item in json.load(f):
-                    name_map[item["code"]] = item["name"]
-        except Exception:
-            pass
-
-    # Enrich with names
     for s in all_stocks:
         s["name"] = name_map.get(s["symbol"], "")
+        missing_data_types = _get_missing_data_types(s)
+        s["missingDataTypes"] = missing_data_types
+        s["missingCount"] = len(missing_data_types)
 
-    # Filter by query
+    if missingOnly:
+        all_stocks = [s for s in all_stocks if s.get("missingCount", 0) > 0]
+
     if q:
         ql = q.lower()
         all_stocks = [s for s in all_stocks if ql in s["symbol"].lower() or ql in s["name"].lower()]
@@ -126,6 +159,26 @@ async def data_stocks(
     }
 
 
+@router.get("/system/data-stocks")
+async def data_stocks(
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(50, ge=1, le=200),
+    q: str = Query("", description="Search by symbol or name"),
+    missingOnly: bool = Query(False, description="Only return stocks with missing local data"),
+):
+    return _format_data_stocks_response(data_store.list_stocks_with_data(), page, pageSize, q, missingOnly)
+
+
+@router.post("/system/data-stocks/rebuild")
+async def rebuild_data_stocks(
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(50, ge=1, le=200),
+    q: str = Query("", description="Search by symbol or name"),
+    missingOnly: bool = Query(False, description="Only return stocks with missing local data"),
+):
+    return _format_data_stocks_response(data_store.rebuild_stocks_with_data_cache(), page, pageSize, q, missingOnly)
+
+
 @router.post("/system/data-download")
 async def start_download():
     return await batch_downloader.start_download()
@@ -139,6 +192,11 @@ async def stop_download():
 @router.post("/system/data/refresh/{symbol}")
 async def refresh_stock(symbol: str):
     return await batch_downloader.refresh_single(symbol)
+
+
+@router.post("/system/data/refresh-missing/{symbol}")
+async def refresh_missing_stock(symbol: str):
+    return await batch_downloader.refresh_missing(symbol)
 
 
 @router.post("/system/data/download/{symbol}")
@@ -253,26 +311,20 @@ async def delete_market_data(trade_date: str):
 
 @router.get("/system/industries")
 async def list_industries():
-    """List all A-share industries with stock counts."""
-    import asyncio
-    import akshare as ak
+    """List industries from local profile data to avoid slow AKShare calls on page load."""
+    counts: Counter[str] = Counter()
+    for symbol in data_store.list_stock_symbols_with_data():
+        profile = data_store.load_stock_data(symbol, "profile")
+        if isinstance(profile, dict):
+            industry = str(profile.get("industry") or "").strip()
+            if industry and industry != "未知":
+                counts[industry] += 1
 
-    def _fetch():
-        df = ak.stock_board_industry_name_em()
-        results = []
-        for _, row in df.iterrows():
-            results.append({
-                "name": str(row.get("板块名称", "")),
-                "code": str(row.get("板块代码", "")),
-                "count": int(row.get("总家数", 0) or 0),
-            })
-        return results
-
-    try:
-        industries = await asyncio.to_thread(_fetch)
-        return {"items": industries}
-    except Exception as e:
-        return {"items": [], "error": str(e)}
+    items = [
+        {"name": name, "code": "", "count": count}
+        for name, count in counts.most_common()
+    ]
+    return {"items": items}
 
 
 @router.get("/system/industry/{industry_name}/stocks")

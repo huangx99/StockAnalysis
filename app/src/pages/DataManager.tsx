@@ -15,8 +15,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { MarketDataPanel } from '@/pages/MarketDataManager'
 import {
-  getDataStatus, getDataStocks, searchStocks as apiSearch,
-  downloadStockData, refreshStockData, refreshAllData, deleteStockData,
+  getDataStatus, getDataStocks, rebuildDataStocks, searchStocks as apiSearch,
+  downloadStockData, refreshStockData, refreshMissingStockData, refreshAllData, deleteStockData,
   startDataDownload, stopDataDownload, resetDataStatus,
   getIndustries, getIndustryStocks, getSingleDownloadStatus,
 } from '@/api/real/stockApi'
@@ -40,6 +40,12 @@ const DATA_TYPE_LABELS: Record<string, string> = {
   dividends: '分红',
   notices: '公告',
   reports: '研报',
+}
+const PAGE_SIZE = 50
+const LOCAL_TABLE_COLS = Object.keys(DATA_TYPE_LABELS).length + 5
+
+function formatMissingDataTypes(types: string[] = []): string {
+  return types.map(type => DATA_TYPE_LABELS[type] || type).join('、')
 }
 
 
@@ -99,15 +105,17 @@ export default function DataManager() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [localQuery, setLocalQuery] = useState('')
+  const [missingOnly, setMissingOnly] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [rebuildingLocal, setRebuildingLocal] = useState(false)
   const [refreshingSymbol, setRefreshingSymbol] = useState<string | null>(null)
   const [refreshingAll, setRefreshingAll] = useState(false)
 
 
-  const fetchStocks = useCallback(async (p: number, q: string) => {
+  const fetchStocks = useCallback(async (p: number, q: string, onlyMissing: boolean) => {
     setLoading(true)
     try {
-      const res = await getDataStocks(p, 50, q)
+      const res = await getDataStocks(p, PAGE_SIZE, q, onlyMissing)
       setStocks(res.items)
       setTotal(res.total)
     } catch {}
@@ -123,19 +131,26 @@ export default function DataManager() {
 
 
   useEffect(() => {
-    fetchStocks(1, '')
     fetchBatchStatus()
-  }, [])
+  }, [fetchBatchStatus])
+
+  // Debounced local data fetch
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchStocks(page, localQuery, missingOnly)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [page, localQuery, missingOnly, fetchStocks])
 
   // Poll batch status while running
   useEffect(() => {
     if (batchStatus?.status !== 'running') return
     const timer = setInterval(() => {
       fetchBatchStatus()
-      fetchStocks(page, localQuery)
+      fetchStocks(page, localQuery, missingOnly)
     }, 3000)
     return () => clearInterval(timer)
-  }, [batchStatus?.status])
+  }, [batchStatus?.status, fetchBatchStatus, fetchStocks, page, localQuery, missingOnly])
 
 
   // Auto-scroll log box to bottom
@@ -212,6 +227,7 @@ export default function DataManager() {
           const labelMap: Record<string, string> = {
             kline_day: '日K', kline_week: '周K', kline_month: '月K',
             financials: '财务', news: '新闻', dividends: '分红', profile: '基本信息',
+            notices: '公告', reports: '研报',
           }
           const parts = Object.entries(stats as Record<string, number>)
             .filter(([, v]) => v > 0)
@@ -228,8 +244,8 @@ export default function DataManager() {
     }
 
     processingRef.current = false
-    fetchStocks(page, localQuery)
-  }, [page, localQuery, fetchStocks])
+    fetchStocks(page, localQuery, missingOnly)
+  }, [page, localQuery, missingOnly, fetchStocks])
 
   // Auto-process queue when items are added
   useEffect(() => {
@@ -300,12 +316,19 @@ export default function DataManager() {
   }
 
   // Single stock handlers
-  const handleRefreshSingle = async (symbol: string) => {
-    setRefreshingSymbol(symbol)
+  const handleRefreshSingle = async (stock: StockDataSummary) => {
+    setRefreshingSymbol(stock.symbol)
     try {
-      await refreshStockData(symbol)
-      fetchStocks(page, localQuery)
-    } catch {}
+      const res = (stock.missingCount || 0) > 0
+        ? await refreshMissingStockData(stock.symbol)
+        : await refreshStockData(stock.symbol)
+      if (res.status !== 'ok') {
+        alert(res.message || '更新未完全成功，请查看后端日志')
+      }
+      fetchStocks(page, localQuery, missingOnly)
+    } catch (e: any) {
+      alert(e?.message || '更新失败，请稍后重试')
+    }
     setRefreshingSymbol(null)
   }
 
@@ -315,11 +338,23 @@ export default function DataManager() {
     setRefreshingAll(false)
   }
 
+  const handleRebuildLocalList = async () => {
+    setRebuildingLocal(true)
+    setLoading(true)
+    try {
+      const res = await rebuildDataStocks(page, PAGE_SIZE, localQuery, missingOnly)
+      setStocks(res.items)
+      setTotal(res.total)
+    } catch {}
+    setLoading(false)
+    setRebuildingLocal(false)
+  }
+
 
   const handleDelete = async (symbol: string) => {
     if (!confirm(`确定删除 ${symbol} 的本地数据？`)) return
     await deleteStockData(symbol)
-    fetchStocks(page, localQuery)
+    fetchStocks(page, localQuery, missingOnly)
   }
 
   const activeQueue = queue.filter(q => q.status === 'pending' || q.status === 'downloading')
@@ -640,14 +675,35 @@ export default function DataManager() {
           <h2 className="font-h3 whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>
             本地数据 <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>({total} 只)</span>
           </h2>
-          <div className="relative max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-            <Input
-              placeholder="筛选..."
-              value={localQuery}
-              onChange={(e) => { setLocalQuery(e.target.value); fetchStocks(1, e.target.value); setPage(1) }}
-              className="pl-9 h-8 text-sm"
-            />
+          <div className="flex items-center gap-2">
+            <Button
+              variant={missingOnly ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => { setMissingOnly(v => !v); setPage(1) }}
+              title="只显示缺失部分本地数据的股票"
+            >
+              <XCircle className="w-3.5 h-3.5 mr-1.5" />
+              只看缺失
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRebuildLocalList}
+              disabled={rebuildingLocal}
+              title="重新扫描本地数据目录"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${rebuildingLocal ? 'animate-spin' : ''}`} />
+              刷新列表
+            </Button>
+            <div className="relative max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+              <Input
+                placeholder="按代码/名称筛选..."
+                value={localQuery}
+                onChange={(e) => { setLocalQuery(e.target.value); setPage(1) }}
+                className="pl-9 h-8 text-sm"
+              />
+            </div>
           </div>
         </div>
 
@@ -660,16 +716,17 @@ export default function DataManager() {
                 {Object.entries(DATA_TYPE_LABELS).map(([key, label]) => (
                   <th key={key} className="text-center px-2 py-2.5 font-medium" style={{ color: 'var(--text-secondary)' }}>{label}</th>
                 ))}
+                <th className="text-center px-4 py-2.5 font-medium" style={{ color: 'var(--text-secondary)' }}>缺失</th>
                 <th className="text-right px-4 py-2.5 font-medium" style={{ color: 'var(--text-secondary)' }}>大小</th>
                 <th className="text-center px-4 py-2.5 font-medium" style={{ color: 'var(--text-secondary)' }}>操作</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} className="text-center py-12" style={{ color: 'var(--text-muted)' }}>加载中...</td></tr>
+                <tr><td colSpan={LOCAL_TABLE_COLS} className="text-center py-12" style={{ color: 'var(--text-muted)' }}>加载中...</td></tr>
               ) : stocks.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-12" style={{ color: 'var(--text-muted)' }}>
-                  {localQuery ? '未找到匹配数据' : '暂无本地数据，在上方搜索股票并下载'}
+                <tr><td colSpan={LOCAL_TABLE_COLS} className="text-center py-12" style={{ color: 'var(--text-muted)' }}>
+                  {localQuery ? '未找到匹配数据' : missingOnly ? '没有缺失数据，当前本地数据都完整' : '暂无本地数据，在上方搜索股票并下载'}
                 </td></tr>
               ) : stocks.map((stock) => (
                 <tr key={stock.symbol} className="border-t border-border-subtle hover:bg-bg-surface-hover transition-colors">
@@ -688,6 +745,9 @@ export default function DataManager() {
                       )}
                     </td>
                   ))}
+                  <td className="text-center px-4 py-2.5 text-xs" style={{ color: (stock.missingCount || 0) > 0 ? 'var(--down-green)' : 'var(--text-muted)' }} title={formatMissingDataTypes(stock.missingDataTypes)}>
+                    {(stock.missingCount || 0) > 0 ? `缺 ${stock.missingCount} 项` : '完整'}
+                  </td>
                   <td className="text-right px-4 py-2.5 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
                     {formatBytes(stock.totalSize)}
                   </td>
@@ -696,8 +756,13 @@ export default function DataManager() {
                       <button onClick={() => navigate(`/stock/${stock.symbol}`)} className="p-1.5 rounded hover:bg-bg-elevated transition-colors" title="查看">
                         <ArrowRight className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
                       </button>
-                      <button onClick={() => handleRefreshSingle(stock.symbol)} disabled={refreshingSymbol === stock.symbol} className="p-1.5 rounded hover:bg-bg-elevated transition-colors" title="刷新">
-                        <RefreshCw className={`w-3.5 h-3.5 ${refreshingSymbol === stock.symbol ? 'animate-spin' : ''}`} style={{ color: 'var(--text-secondary)' }} />
+                      <button
+                        onClick={() => handleRefreshSingle(stock)}
+                        disabled={refreshingSymbol === stock.symbol}
+                        className="p-1.5 rounded hover:bg-bg-elevated transition-colors"
+                        title={(stock.missingCount || 0) > 0 ? `补齐缺失：${formatMissingDataTypes(stock.missingDataTypes)}` : '刷新全部'}
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${refreshingSymbol === stock.symbol ? 'animate-spin' : ''}`} style={{ color: (stock.missingCount || 0) > 0 ? 'var(--down-green)' : 'var(--text-secondary)' }} />
                       </button>
                       <button onClick={() => handleDelete(stock.symbol)} className="p-1.5 rounded hover:bg-bg-elevated transition-colors" title="删除">
                         <Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
@@ -710,12 +775,12 @@ export default function DataManager() {
           </table>
         </div>
 
-        {total > 50 && (
+        {total > PAGE_SIZE && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle">
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>第 {page} 页，共 {Math.ceil(total / 50)} 页</span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>第 {page} 页，共 {Math.ceil(total / PAGE_SIZE)} 页</span>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => { setPage(p => p - 1); fetchStocks(page - 1, localQuery) }}>上一页</Button>
-              <Button variant="outline" size="sm" disabled={page >= Math.ceil(total / 50)} onClick={() => { setPage(p => p + 1); fetchStocks(page + 1, localQuery) }}>下一页</Button>
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
+              <Button variant="outline" size="sm" disabled={page >= Math.ceil(total / PAGE_SIZE)} onClick={() => setPage(p => p + 1)}>下一页</Button>
             </div>
           </div>
         )}

@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ChevronLeft, BarChart3, Newspaper, FileText, Settings, Heart, Database } from 'lucide-react'
+import { ChevronLeft, BarChart3, Newspaper, FileText, Settings, Heart, Database, Filter } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const navItems = [
   { icon: BarChart3, label: '单股分析', to: '/', active: false },
+  { icon: Filter, label: '股票筛选', to: '/screener', active: false },
   { icon: Heart, label: '自选股', to: '#', disabled: true, badge: '即将上线' },
   { icon: BarChart3, label: '财务分析', to: '#', disabled: true },
   { icon: Newspaper, label: '公告新闻', to: '#', disabled: true },

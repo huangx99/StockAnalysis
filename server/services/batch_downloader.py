@@ -27,10 +27,17 @@ _stop_flag = False
 _MAX_LOGS = 500
 
 DATA_TYPE_LABELS = {
-    "kline_day": "日K", "kline_week": "周K", "kline_month": "月K",
-    "financials": "财务", "news": "新闻", "dividends": "分红", "profile": "基本信息",
-    "notices": "公告", "reports": "研报",
+    "profile": "基本信息",
+    "kline_day": "日K",
+    "kline_week": "周K",
+    "kline_month": "月K",
+    "financials": "财务",
+    "news": "新闻",
+    "dividends": "分红",
+    "notices": "公告",
+    "reports": "研报",
 }
+PRIMARY_DATA_TYPES = tuple(DATA_TYPE_LABELS.keys())
 
 SKIP_EXISTING_DATA_TYPES = {"financials", "news", "dividends", "notices", "reports"}
 
@@ -56,6 +63,10 @@ def _has_financial_bundle(symbol: str) -> bool:
 
 def _should_skip_existing(symbol: str, data_type: str, skip_existing: bool) -> bool:
     return skip_existing and data_type in SKIP_EXISTING_DATA_TYPES and _has_stored_data(symbol, data_type)
+
+
+def get_missing_data_types(symbol: str) -> list[str]:
+    return [data_type for data_type in PRIMARY_DATA_TYPES if not data_store.has_stock_data(symbol, data_type)]
 
 
 def _append_log(logs: list[str], msg: str) -> None:
@@ -297,6 +308,11 @@ async def _fetch_and_save_news(symbol: str) -> int:
         data_store.save_stock_data(symbol, "news", results)
         return len(results)
     except Exception as e:
+        message = str(e)
+        if "returned empty" in message:
+            data_store.save_stock_data(symbol, "news", [])
+            logger.info("[download] news %s has no remote data; saved empty list", symbol)
+            return 0
         logger.error("[download] news %s failed: %s", symbol, e)
         return 0
 
@@ -692,21 +708,59 @@ async def stop_download() -> dict:
     return {"status": "stopping", "message": "Download will stop after current stock completes"}
 
 
+def _get_stock_name(symbol: str) -> str:
+    stock_list = _load_stock_list()
+    for stock in stock_list:
+        if stock["code"] == symbol:
+            return stock["name"]
+    return ""
+
+
 async def refresh_single(symbol: str) -> dict:
     """Re-download all data for a single stock (force overwrite)."""
-    stock_list = _load_stock_list()
-    name = ""
-    for s in stock_list:
-        if s["code"] == symbol:
-            name = s["name"]
-            break
-
+    name = _get_stock_name(symbol)
     data_types = list(data_store.DATA_TYPES)
     try:
         await _download_single(symbol, name, data_types)
         return {"status": "ok", "symbol": symbol, "message": f"Refreshed data for {symbol}"}
     except Exception as e:
         return {"status": "error", "symbol": symbol, "message": str(e)}
+
+
+async def refresh_missing(symbol: str) -> dict:
+    """Download only missing primary local data types for a single stock."""
+    name = _get_stock_name(symbol)
+    missing_data_types = get_missing_data_types(symbol)
+    if not missing_data_types:
+        return {
+            "status": "ok",
+            "symbol": symbol,
+            "missingDataTypes": [],
+            "stats": {},
+            "message": f"{symbol} has no missing local data",
+        }
+
+    try:
+        stats = await _download_single(symbol, name, missing_data_types)
+        still_missing = get_missing_data_types(symbol)
+        fixed_data_types = [data_type for data_type in missing_data_types if data_type not in still_missing]
+        status = "ok" if not still_missing else "partial"
+        message = (
+            f"Downloaded missing data for {symbol}"
+            if not still_missing
+            else f"Only fixed {len(fixed_data_types)}/{len(missing_data_types)} missing data types for {symbol}"
+        )
+        return {
+            "status": status,
+            "symbol": symbol,
+            "missingDataTypes": missing_data_types,
+            "fixedDataTypes": fixed_data_types,
+            "stillMissingDataTypes": still_missing,
+            "stats": stats,
+            "message": message,
+        }
+    except Exception as e:
+        return {"status": "error", "symbol": symbol, "missingDataTypes": missing_data_types, "message": str(e)}
 
 
 async def refresh_all_existing() -> dict:

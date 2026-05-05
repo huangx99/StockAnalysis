@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from routers import stocks, system, ai
+from routers import stocks, system, ai, screener
 from utils.logging_config import setup_logging
 from services.stock_service import prewarm_spot_cache
 
@@ -47,6 +47,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(stocks.router)
 app.include_router(ai.router)
 app.include_router(system.router)
+app.include_router(screener.router)
 
 
 @app.on_event("startup")
@@ -69,8 +70,12 @@ async def startup():
         else:
             logger.warning("AKShare function %s: NOT FOUND", fn)
 
-    # Pre-warm spot cache in background so first request isn't slow
-    asyncio.create_task(_prewarm())
+    # Avoid expensive full-market AKShare fetch on every startup when local stock list exists.
+    stock_list_path = Path(__file__).parent / "data" / "stock_list.json"
+    if not stock_list_path.exists():
+        asyncio.create_task(_prewarm())
+    else:
+        logger.info("Stock list exists, skip startup spot prewarm")
 
 
 async def _prewarm():

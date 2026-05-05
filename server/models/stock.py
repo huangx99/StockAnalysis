@@ -201,3 +201,104 @@ class TechnicalIndicators(BaseModel):
 class StockStats(BaseModel):
     marketStats: MarketStats
     technicalIndicators: TechnicalIndicators
+
+
+class ScreenerRequest(BaseModel):
+    preset: Literal["consecutive_growth", "recent_strength", "profit_growth_rank", "custom"] = "custom"
+    formula: str | None = None
+    sortFormula: str | None = None
+    minRoe: float | None = None
+    maxDebtRatio: float | None = None
+    minRevenueYoY: float | None = None
+    minNetProfitYoY: float | None = None
+    maxPe: float | None = None
+    maxPb: float | None = None
+    minMarketCap: float | None = None
+    maxMarketCap: float | None = None
+    industry: str | None = None
+    q: str | None = None
+    sortBy: str = "netProfitYoY"
+    sortDir: Literal["asc", "desc"] = "desc"
+    page: int = 1
+    pageSize: int = 50
+
+
+class ScreenedStock(BaseModel):
+    symbol: str
+    name: str = ""
+    industry: str = ""
+    currentPrice: float = 0.0
+    changePercent: float = 0.0
+    pe: float = 0.0
+    pb: float = 0.0
+    marketCap: float = 0.0
+    roe: float = 0.0
+    netProfitYoY: float = 0.0
+    revenueYoY: float = 0.0
+    grossMargin: float = 0.0
+    netMargin: float = 0.0
+    debtAssetRatio: float = 0.0
+    consecutiveGrowthYears: int = 0
+    recentStrength: float = 0.0
+    hasProfileData: bool = True
+    hasFinancialData: bool = True
+    hasKlineData: bool = True
+    formulaValues: dict[str, Any] = Field(default_factory=dict)
+    formulaReason: str = ""
+    formulaSortValue: float | None = None
+
+
+class ScreenerDiagnosis(BaseModel):
+    stock: ScreenedStock
+    reasons: list[str] = Field(default_factory=list)
+
+
+class FormulaGenerateRequest(BaseModel):
+    description: str
+
+
+class FormulaGenerateResponse(BaseModel):
+    ok: bool = False
+    formula: str = ""
+    filterFormula: str = ""
+    sortFormula: str = ""
+    sortDir: Literal["asc", "desc"] = "desc"
+    title: str = ""
+    summary: str = ""
+    explanation: str = ""
+    investmentLogic: list[str] = Field(default_factory=list)
+    useCases: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
+    usedFields: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    validationPlan: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class ScreenerInsight(BaseModel):
+    title: str = ""
+    summary: str = ""
+    generationMethod: str = "规则生成"
+    generatedAt: str = ""
+    timeRange: str = ""
+    rankingReasons: list[str] = Field(default_factory=list)
+    structureInsights: list[str] = Field(default_factory=list)
+    newsInsights: list[str] = Field(default_factory=list)
+    reportInsights: list[str] = Field(default_factory=list)
+    conclusion: str = ""
+    nextSteps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class ScreenerResponse(BaseModel):
+    items: list[ScreenedStock] = Field(default_factory=list)
+    total: int = 0
+    matchedCount: int = 0
+    page: int = 1
+    pageSize: int = 50
+    scannedCount: int = 0
+    dataDate: str = ""
+    diagnosis: ScreenerDiagnosis | None = None
+    insight: ScreenerInsight | None = None

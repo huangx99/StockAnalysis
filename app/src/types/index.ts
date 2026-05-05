@@ -275,6 +275,8 @@ export interface StockDataSummary {
   exists: boolean;
   dataTypes: Record<string, { exists: boolean; size: number; updatedAt: string | null }>;
   totalSize: number;
+  missingDataTypes?: string[];
+  missingCount?: number;
 }
 
 export interface DataStocksResponse {
@@ -297,6 +299,122 @@ export interface MarketDownloadStatus {
   updatedAt: string | null;
   dataTypes: string[];
   logs: string[];
+}
+
+export interface ScreenerRequest {
+  preset: 'consecutive_growth' | 'recent_strength' | 'profit_growth_rank' | 'custom';
+  formula?: string | null;
+  sortFormula?: string | null;
+  minRoe?: number | null;
+  maxDebtRatio?: number | null;
+  minRevenueYoY?: number | null;
+  minNetProfitYoY?: number | null;
+  maxPe?: number | null;
+  maxPb?: number | null;
+  minMarketCap?: number | null;
+  maxMarketCap?: number | null;
+  industry?: string | null;
+  q?: string | null;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ScreenedStock {
+  symbol: string;
+  name: string;
+  industry: string;
+  currentPrice: number;
+  changePercent: number;
+  pe: number;
+  pb: number;
+  marketCap: number;
+  roe: number;
+  netProfitYoY: number;
+  revenueYoY: number;
+  grossMargin: number;
+  netMargin: number;
+  debtAssetRatio: number;
+  consecutiveGrowthYears: number;
+  recentStrength: number;
+  hasProfileData?: boolean;
+  hasFinancialData?: boolean;
+  hasKlineData?: boolean;
+  formulaValues?: Record<string, unknown>;
+  formulaReason?: string;
+  formulaSortValue?: number | null;
+}
+
+
+export interface FormulaFieldMeta {
+  key: string;
+  label: string;
+  category: string;
+  description: string;
+  aliases: string[];
+  unit?: string;
+}
+
+export interface FormulaGenerateResponse {
+  ok: boolean;
+  formula?: string;
+  filterFormula?: string;
+  sortFormula?: string;
+  sortDir?: 'asc' | 'desc';
+  title?: string;
+  summary?: string;
+  explanation?: string;
+  investmentLogic?: string[];
+  useCases?: string[];
+  steps?: string[];
+  usedFields?: { name: string; meaning?: string; unit?: string }[];
+  warnings?: string[];
+  validationPlan?: string[];
+  reason?: string;
+}
+
+
+export interface ScreenerInsight {
+  title: string;
+  summary: string;
+  generationMethod?: string;
+  generatedAt?: string;
+  timeRange?: string;
+  rankingReasons: string[];
+  structureInsights: string[];
+  newsInsights: string[];
+  reportInsights: string[];
+  conclusion: string;
+  nextSteps: string[];
+  warnings: string[];
+  limitations?: string[];
+  evidence: {
+    symbol?: string;
+    name?: string;
+    type?: string;
+    title?: string;
+    date?: string;
+    source?: string;
+    rating?: string;
+  }[];
+}
+
+export interface ScreenerDiagnosis {
+  stock: ScreenedStock;
+  reasons: string[];
+}
+
+export interface ScreenerResponse {
+  items: ScreenedStock[];
+  total: number;
+  matchedCount: number;
+  page: number;
+  pageSize: number;
+  scannedCount: number;
+  dataDate?: string;
+  diagnosis?: ScreenerDiagnosis | null;
+  insight?: ScreenerInsight | null;
 }
 
 export interface MarketDataSummary {

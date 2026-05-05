@@ -6,6 +6,7 @@ import AIReportPage from './pages/AIReport'
 import Settings from './pages/Settings'
 import DataManager from './pages/DataManager'
 import MarketDataManager from './pages/MarketDataManager'
+import Screener from './pages/Screener'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/stock/:symbol/report" element={<AIReportPage />} />
         <Route path="/data" element={<DataManager />} />
         <Route path="/market" element={<MarketDataManager />} />
+        <Route path="/screener" element={<Screener />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
