@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { AlertTriangle, Search, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, Search, Sparkles, X, Network } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import StockHeader from '@/components/stock/StockHeader'
 import StockMetricCards from '@/components/stock/StockMetricCards'
@@ -264,6 +264,23 @@ export default function StockDashboard() {
       ) : profile ? (
         <StockMetricCards profile={profile} />
       ) : null}
+
+      {profile?.industry && profile.industry !== '未知' && (
+        <div className="mt-4 rounded-xl border border-border-subtle px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" style={{ backgroundColor: 'var(--bg-surface)' }}>
+          <div>
+            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>同行业横向对比</div>
+            <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>当前行业：{profile.industry}，可查看同行评分榜、行业洞察和风险分组。</div>
+          </div>
+          <Link
+            to={`/industry?industry=${encodeURIComponent(profile.industry)}`}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-white"
+            style={{ backgroundColor: 'var(--accent-primary)' }}
+          >
+            <Network className="w-4 h-4" />
+            查看同行对比
+          </Link>
+        </div>
+      )}
 
       {/* Chart section */}
       <div className="mt-4">

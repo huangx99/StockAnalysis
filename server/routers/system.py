@@ -27,6 +27,7 @@ LOCAL_DATA_TYPE_LABELS = {
     "reports": "研报",
 }
 REQUIRED_LOCAL_DATA_TYPES = tuple(LOCAL_DATA_TYPE_LABELS.keys())
+INDUSTRY_SNAPSHOT_FILE = Path(__file__).parent.parent / "data" / "industry_snapshot.json"
 
 
 def _get_missing_data_types(stock: dict) -> list[str]:
@@ -135,7 +136,10 @@ def _format_data_stocks_response(
     name_map = _load_stock_name_map()
 
     for s in all_stocks:
-        s["name"] = name_map.get(s["symbol"], "")
+        symbol = str(s.get("symbol") or "")
+        profile = _profile_for_symbol(symbol, name_map) if symbol else {}
+        s["name"] = profile.get("name") or name_map.get(symbol, "")
+        s["industry"] = profile.get("industry") or "未知"
         missing_data_types = _get_missing_data_types(s)
         s["missingDataTypes"] = missing_data_types
         s["missingCount"] = len(missing_data_types)
@@ -156,6 +160,168 @@ def _format_data_stocks_response(
         "page": page,
         "pageSize": pageSize,
         "items": all_stocks[start:end],
+    }
+
+
+def _profile_for_symbol(symbol: str, name_map: dict[str, str]) -> dict:
+    profile = data_store.load_stock_data(symbol, "profile")
+    if not isinstance(profile, dict):
+        return {
+            "symbol": symbol,
+            "name": name_map.get(symbol, ""),
+            "industry": "未知",
+            "currentPrice": 0,
+            "changePercent": 0,
+            "marketCap": 0,
+            "pe": 0,
+            "pb": 0,
+        }
+    return {
+        "symbol": symbol,
+        "name": str(profile.get("name") or name_map.get(symbol, "")),
+        "industry": str(profile.get("industry") or "未知"),
+        "currentPrice": profile.get("currentPrice") or 0,
+        "changePercent": profile.get("changePercent") or 0,
+        "marketCap": profile.get("marketCap") or 0,
+        "pe": profile.get("pe") or 0,
+        "pb": profile.get("pb") or 0,
+    }
+
+
+def _stock_has_financial_periods(symbol: str) -> bool:
+    periods = data_store.load_stock_data(symbol, "financial_periods")
+    return isinstance(periods, list) and len(periods) > 0
+
+
+def _build_industry_snapshot() -> dict:
+    name_map = _load_stock_name_map()
+    industries: dict[str, dict] = {}
+    stocks: list[dict] = []
+    for item in data_store.list_stocks_with_data():
+        symbol = str(item.get("symbol") or "")
+        if not symbol:
+            continue
+        profile = _profile_for_symbol(symbol, name_map)
+        industry = str(profile.get("industry") or "未知")
+        scorable = _stock_has_financial_periods(symbol)
+        stocks.append({
+            "symbol": symbol,
+            "name": profile.get("name") or name_map.get(symbol, ""),
+            "industry": industry,
+            "scorable": scorable,
+            "profile": profile,
+        })
+        if not industry or industry == "未知":
+            continue
+        row = industries.setdefault(industry, {"industry": industry, "count": 0, "scorableCount": 0, "symbols": []})
+        row["count"] += 1
+        if scorable:
+            row["scorableCount"] += 1
+        row["symbols"].append(symbol)
+    industry_items = sorted(
+        industries.values(),
+        key=lambda row: (row["scorableCount"], row["count"], row["industry"]),
+        reverse=True,
+    )
+    return {
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "items": industry_items,
+        "stocks": stocks,
+    }
+
+
+def _load_industry_snapshot() -> dict | None:
+    if not INDUSTRY_SNAPSHOT_FILE.exists():
+        return None
+    try:
+        with open(INDUSTRY_SNAPSHOT_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if isinstance(payload, dict) and isinstance(payload.get("items"), list) and isinstance(payload.get("stocks"), list):
+            return payload
+    except Exception:
+        pass
+    return None
+
+
+def _save_industry_snapshot(snapshot: dict) -> None:
+    INDUSTRY_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(INDUSTRY_SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, ensure_ascii=False)
+
+
+def _get_or_build_industry_snapshot(force: bool = False) -> dict:
+    if not force:
+        snapshot = _load_industry_snapshot()
+        if snapshot is not None:
+            return snapshot
+    snapshot = _build_industry_snapshot()
+    _save_industry_snapshot(snapshot)
+    return snapshot
+
+
+@router.get("/industry/industries")
+async def industry_list():
+    snapshot = _get_or_build_industry_snapshot()
+    return {
+        "updatedAt": snapshot.get("updatedAt"),
+        "items": snapshot.get("items", []),
+    }
+
+
+@router.post("/industry/industries/rebuild")
+async def rebuild_industry_list():
+    snapshot = _get_or_build_industry_snapshot(force=True)
+    return {
+        "updatedAt": snapshot.get("updatedAt"),
+        "items": snapshot.get("items", []),
+    }
+
+
+@router.get("/industry/compare")
+async def industry_compare(
+    industry: str = Query("", description="Industry name"),
+    period: str = Query("annual", pattern="^(annual|quarter)$"),
+    q: str = Query("", description="Search by symbol or name"),
+    completeOnly: bool = Query(False, description="Only include stocks with financial periods"),
+    limit: int = Query(300, ge=1, le=1000),
+):
+    snapshot = _get_or_build_industry_snapshot()
+    peers = []
+    ql = q.lower().strip()
+    for stock in snapshot.get("stocks", []):
+        symbol = str(stock.get("symbol") or "")
+        profile = stock.get("profile") if isinstance(stock.get("profile"), dict) else {}
+        stock_industry = str(stock.get("industry") or profile.get("industry") or "未知")
+        name = str(stock.get("name") or profile.get("name") or "")
+        if industry and stock_industry != industry:
+            continue
+        if ql and ql not in symbol.lower() and ql not in name.lower():
+            continue
+        if completeOnly and not stock.get("scorable"):
+            continue
+        raw_periods = data_store.load_stock_data(symbol, "financial_periods")
+        periods = raw_periods if isinstance(raw_periods, list) else []
+        if period == "annual":
+            periods = [p for p in periods if p.get("reportQuarter") == "FY"]
+        periods = sorted(periods, key=lambda p: str(p.get("reportDate") or ""), reverse=True)[:16]
+        if completeOnly and not periods:
+            continue
+        peers.append({
+            "symbol": symbol,
+            "name": name,
+            "industry": stock_industry,
+            "profile": profile or _profile_for_symbol(symbol, _load_stock_name_map()),
+            "periods": periods,
+            "hasFinancialData": len(periods) > 0,
+        })
+        if len(peers) >= limit:
+            break
+    return {
+        "industry": industry,
+        "period": period,
+        "updatedAt": snapshot.get("updatedAt"),
+        "total": len(peers),
+        "items": peers,
     }
 
 

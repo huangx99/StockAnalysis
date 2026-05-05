@@ -7,6 +7,7 @@ import Settings from './pages/Settings'
 import DataManager from './pages/DataManager'
 import MarketDataManager from './pages/MarketDataManager'
 import Screener from './pages/Screener'
+import IndustryCompare from './pages/IndustryCompare'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/data" element={<DataManager />} />
         <Route path="/market" element={<MarketDataManager />} />
         <Route path="/screener" element={<Screener />} />
+        <Route path="/industry" element={<IndustryCompare />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>

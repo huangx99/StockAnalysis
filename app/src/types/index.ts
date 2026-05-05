@@ -272,6 +272,7 @@ export interface SingleDownloadProgress {
 export interface StockDataSummary {
   symbol: string;
   name?: string;
+  industry?: string;
   exists: boolean;
   dataTypes: Record<string, { exists: boolean; size: number; updatedAt: string | null }>;
   totalSize: number;
@@ -284,6 +285,45 @@ export interface DataStocksResponse {
   page: number;
   pageSize: number;
   items: StockDataSummary[];
+}
+
+export interface IndustrySummaryItem {
+  industry: string;
+  count: number;
+  scorableCount: number;
+}
+
+export interface IndustryListResponse {
+  updatedAt?: string;
+  items: IndustrySummaryItem[];
+}
+
+export interface IndustryPeerProfile {
+  symbol: string;
+  name: string;
+  industry: string;
+  currentPrice: number;
+  changePercent: number;
+  marketCap: number;
+  pe: number;
+  pb: number;
+}
+
+export interface IndustryPeerData {
+  symbol: string;
+  name: string;
+  industry: string;
+  profile: IndustryPeerProfile;
+  periods: FinancialPeriodMetrics[];
+  hasFinancialData: boolean;
+}
+
+export interface IndustryCompareResponse {
+  industry: string;
+  period: 'annual' | 'quarter';
+  updatedAt?: string;
+  total: number;
+  items: IndustryPeerData[];
 }
 
 export interface MarketDownloadStatus {

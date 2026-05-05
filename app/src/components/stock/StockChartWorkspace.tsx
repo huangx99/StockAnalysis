@@ -136,18 +136,37 @@ function InsightPanel({ insight }: { insight: FinancialInsight }) {
           <span key={tag} className="rounded px-2 py-0.5 text-xs" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-elevated)' }}>{tag}</span>
         ))}
       </div>
-      <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--text-primary)' }}>{insight.summary}</p>
-      <div className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-2">
-        {insight.evidence.slice(0, 4).map((item) => (
-          <div key={item} className="text-xs" style={{ color: 'var(--text-secondary)' }}>• {item}</div>
-        ))}
+
+      <div className="mt-3 rounded-md border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-base)' }}>
+        <div className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>结论</div>
+        <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--text-primary)' }}>{insight.decision}</p>
+        <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{insight.impact}</p>
       </div>
-      <details className="mt-2">
-        <summary className="cursor-pointer text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>查看计算公式</summary>
-        <div className="mt-2 flex flex-col gap-1 rounded-md border border-border-subtle p-2" style={{ backgroundColor: 'var(--bg-base)' }}>
-          {insight.formulas.map((formula) => (
-            <div key={formula} className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>• {formula}</div>
+
+      <div className="mt-3">
+        <div className="mb-1 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>实际依据</div>
+        <div className="grid grid-cols-1 gap-1 md:grid-cols-2">
+          {insight.evidence.slice(0, 4).map((item) => (
+            <div key={item} className="text-xs" style={{ color: 'var(--text-secondary)' }}>• {item}</div>
           ))}
+        </div>
+      </div>
+
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>查看后续关注与计算公式</summary>
+        <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
+          <div className="rounded-md border border-border-subtle p-2" style={{ backgroundColor: 'var(--bg-base)' }}>
+            <div className="mb-1 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>后续关注</div>
+            {insight.watchList.map((item) => (
+              <div key={item} className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>• {item}</div>
+            ))}
+          </div>
+          <div className="rounded-md border border-border-subtle p-2" style={{ backgroundColor: 'var(--bg-base)' }}>
+            <div className="mb-1 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>计算公式</div>
+            {insight.formulas.map((formula) => (
+              <div key={formula} className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>• {formula}</div>
+            ))}
+          </div>
         </div>
       </details>
     </div>
@@ -155,25 +174,56 @@ function InsightPanel({ insight }: { insight: FinancialInsight }) {
 }
 
 function FinancialCommandCenter({ result }: { result: FinancialInsightResult }) {
+  const riskColor = result.riskLevel === '高' ? 'var(--down-green)' : result.riskLevel === '中' ? 'var(--warning)' : 'var(--up-red)'
   const levelColor = statusColor(result.score.rating.startsWith('A') || result.score.rating.startsWith('B') ? '优秀' : result.score.rating.startsWith('D') || result.score.rating.startsWith('E') ? '风险' : '一般')
   return (
     <section className="rounded-xl border border-border-subtle p-5" style={{ backgroundColor: 'var(--bg-base)' }}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="max-w-3xl">
-          <div className="mb-2 text-xs font-medium" style={{ color: 'var(--accent-secondary)' }}>本地规则引擎 · 可复核</div>
+        <div className="max-w-4xl">
+          <div className="mb-2 text-xs font-medium" style={{ color: 'var(--accent-secondary)' }}>本地规则引擎 · 决策驾驶舱 · 可复核</div>
           <h3 className="font-h3 text-xl leading-snug" style={{ color: 'var(--text-primary)' }}>{result.headline}</h3>
           <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{result.conclusion}</p>
         </div>
-        <div className="grid min-w-[260px] grid-cols-2 gap-3">
+        <div className="grid min-w-[320px] grid-cols-2 gap-3">
           <MetricTile label="综合评分" value={`${result.score.total || '—'}`} hint={result.score.rating} positive={result.score.total >= 75} />
+          <MetricTile label="风险等级" value={result.riskLevel} hint={result.riskReasons.slice(0, 1).join('')} positive={result.riskLevel === '低'} />
+          <MetricTile label="投资类型" value={result.investmentType} />
           <MetricTile label="生命周期" value={result.lifecycle} />
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {result.keyFindings.map((finding) => (
-          <div key={finding} className="rounded-lg border border-border-subtle px-3 py-2 text-sm" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-surface)' }}>• {finding}</div>
-        ))}
+
+      <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <div className="rounded-lg border border-border-subtle p-3 xl:col-span-2" style={{ backgroundColor: 'var(--bg-surface)' }}>
+          <div className="mb-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>核心判断</div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {result.keyFindings.map((finding) => (
+              <div key={finding} className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>• {finding}</div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-surface)' }}>
+          <div className="mb-2 text-sm font-medium" style={{ color: riskColor }}>风险原因</div>
+          {result.riskReasons.slice(0, 4).map((reason) => (
+            <div key={reason} className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>• {reason}</div>
+          ))}
+        </div>
       </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-surface)' }}>
+          <div className="mb-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>跨模块推理</div>
+          {result.crossFindings.map((finding) => (
+            <div key={finding} className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>• {finding}</div>
+          ))}
+        </div>
+        <div className="rounded-lg border border-border-subtle p-3" style={{ backgroundColor: 'var(--bg-surface)' }}>
+          <div className="mb-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>接下来重点关注</div>
+          {result.watchList.map((item) => (
+            <div key={item} className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>• {item}</div>
+          ))}
+        </div>
+      </div>
+
       <details className="mt-4">
         <summary className="cursor-pointer text-sm font-medium" style={{ color: levelColor }}>查看评分公式与模块结论</summary>
         <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">

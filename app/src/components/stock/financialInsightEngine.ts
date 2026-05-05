@@ -11,7 +11,10 @@ export interface FinancialInsight {
   trend: InsightTrend
   tags: string[]
   summary: string
+  decision: string
+  impact: string
   evidence: string[]
+  watchList: string[]
   formulas: string[]
   severity: 1 | 2 | 3
 }
@@ -31,6 +34,11 @@ export interface FinancialInsightResult {
   headline: string
   conclusion: string
   lifecycle: string
+  riskLevel: '低' | '中' | '高'
+  riskReasons: string[]
+  investmentType: string
+  crossFindings: string[]
+  watchList: string[]
   keyFindings: string[]
   insights: Record<InsightModule, FinancialInsight>
   score: {
@@ -217,10 +225,27 @@ function buildGrowthInsight(rows: FinancialPeriodMetrics[]): FinancialInsight {
     summary: current.revenueYoY > 0 && current.netProfitYoY < 0
       ? '收入仍在增长，但净利润已经下滑，增长质量转弱。'
       : `最新营收YoY为${pct(current.revenueYoY)}，净利润YoY为${pct(current.netProfitYoY)}，增长状态为${level}。`,
+    decision: current.revenueYoY > 0 && current.netProfitYoY < 0
+      ? '收入没有有效传导到利润，当前更像“增收不增利”，应优先验证利润拐点是否持续。'
+      : trend === '拐点'
+        ? '利润增速已经由正转负，增长逻辑出现拐点，短期需要谨慎看待成长性。'
+        : trend === '放缓'
+          ? '增长仍可能存在，但速度正在放慢，估值逻辑可能从高成长切换到稳增长。'
+          : level === '优秀'
+            ? '收入和利润同步高增长，成长逻辑仍较强。'
+            : '增长状态暂未出现强烈异常，但仍需跟踪收入和利润是否同步。',
+    impact: trend === '拐点' || tags.includes('增收不增利')
+      ? '如果后续净利润YoY不能修复，市场可能更关注利润质量而不是营收规模。'
+      : '增长稳定时更适合观察趋势延续性，而不是只看单期高低。',
     evidence: [
       `${periodLabel(current)}营收 ${money(current.revenue)}，YoY ${pct(current.revenueYoY)}`,
       `${periodLabel(current)}净利润 ${money(current.netProfit)}，YoY ${pct(current.netProfitYoY)}`,
       deltaText('净利润YoY', current.netProfitYoY, prev?.netProfitYoY ?? null),
+    ],
+    watchList: [
+      '净利润YoY是否恢复或保持为正。',
+      '营收增长是否能重新传导到净利润。',
+      '最近3期YoY是否继续下行。',
     ],
     formulas: [
       '营收YoY = (本期营收 - 上年同期营收) / 上年同期营收 × 100%',
@@ -270,10 +295,25 @@ function buildProfitabilityInsight(rows: FinancialPeriodMetrics[]): FinancialIns
     trend,
     tags,
     summary: `ROE为${pct(current.roe)}，净利率为${pct(current.netMargin)}，盈利能力处于${level}水平。`,
+    decision: trend === '恶化'
+      ? '盈利能力正在下行，说明公司赚钱效率变弱，需要关注ROE和净利率是否止跌。'
+      : level === '优秀'
+        ? '盈利能力较强，公司仍具备较好的赚钱效率。'
+        : level === '风险'
+          ? '盈利能力偏弱，单看收入规模不足以支撑乐观判断。'
+          : '盈利水平尚可，关键在于后续ROE能否保持稳定。',
+    impact: trend === '恶化'
+      ? 'ROE持续下行可能压制估值中枢，也会削弱长期复利能力。'
+      : '盈利稳定时，公司更容易维持经营质量和估值韧性。',
     evidence: [
       deltaText('ROE', current.roe, prev?.roe ?? null),
       deltaText('净利率', current.netMargin, prev?.netMargin ?? null),
       `${periodLabel(current)}毛利率 ${pct(current.grossMargin)}，ROA ${pct(current.roa)}`,
+    ],
+    watchList: [
+      'ROE是否连续止跌或重新上行。',
+      '净利率是否继续低于历史水平。',
+      '毛利率变化是否提前反映盈利压力。',
     ],
     formulas: [
       'ROE = 归母净利润 / 归母权益 × 100%',
@@ -325,10 +365,25 @@ function buildCashflowInsight(rows: FinancialPeriodMetrics[]): FinancialInsight 
     summary: ratio == null
       ? `净利润为${money(current.netProfit)}，CFO为${money(current.operatingCashFlow)}，亏损或低利润阶段改用现金流正负判断。`
       : `CFO/净利润为${ratio.toFixed(2)}，自由现金流为${money(current.freeCashFlow)}，现金质量为${level}。`,
+    decision: ratio == null
+      ? '净利润为负或过低时，CFO/净利润会失真，因此优先看经营现金流和自由现金流是否为正。'
+      : level === '优秀'
+        ? '利润有较强现金支撑，现金流质量较好。'
+        : level === '良好'
+          ? '利润仍有现金支撑，但强度未达到优秀，需要观察现金含量是否继续改善。'
+          : '利润现金支撑不足，存在利润含金量偏低的风险。',
+    impact: trend === '恶化'
+      ? '现金流趋势继续走弱时，可能从利润质量问题演变为经营压力。'
+      : '现金流保持正向时，盈利波动对公司安全边际的冲击相对可控。',
     evidence: [
       `${periodLabel(current)}经营现金流 ${money(current.operatingCashFlow)}，净利润 ${money(current.netProfit)}`,
       ratio == null ? '净利润小于等于0，未直接使用CFO/净利润比值评分' : `CFO/净利润 = ${ratio.toFixed(2)}`,
       deltaText('自由现金流', current.freeCashFlow / 100000000, prev ? prev.freeCashFlow / 100000000 : null, '亿'),
+    ],
+    watchList: [
+      'CFO/净利润是否回到1以上。',
+      '自由现金流是否持续为正。',
+      '经营现金流是否连续低于净利润。',
     ],
     formulas: [
       'CFO/净利润 = 经营现金流 / 归母净利润；净利润<=0时不直接使用该比值，改看CFO和FCF是否为正。',
@@ -378,10 +433,25 @@ function buildSafetyInsight(rows: FinancialPeriodMetrics[]): FinancialInsight {
     trend,
     tags,
     summary: `资产负债率为${pct(current.debtAssetRatio)}，流动比率为${current.currentRatio?.toFixed(2) || '—'}，资产安全性为${level}。`,
+    decision: level === '风险'
+      ? '杠杆水平偏高，资产安全边际不足，需要关注偿债和再融资压力。'
+      : trend === '恶化'
+        ? '负债率正在上升，虽然未必立即危险，但安全边际在变薄。'
+        : level === '优秀'
+          ? '负债和流动性结构较稳，资产端暂未构成主要矛盾。'
+          : '资产结构整体可控，但仍需观察负债率和应收存货变化。',
+    impact: level === '风险'
+      ? '高杠杆会放大盈利下滑和现金流波动的影响。'
+      : '资产安全性较好时，公司更有空间消化短期经营波动。',
     evidence: [
       deltaText('资产负债率', current.debtAssetRatio, prev?.debtAssetRatio ?? null),
       `流动比率 ${current.currentRatio?.toFixed(2) || '—'}，速动比率 ${current.quickRatio?.toFixed(2) || '—'}`,
       `货币资金 ${money(current.cash)}，应收 ${money(current.accountsReceivable)}，存货 ${money(current.inventory)}，商誉 ${money(current.goodwill)}`,
+    ],
+    watchList: [
+      '资产负债率是否继续上升。',
+      '应收账款和存货是否异常扩张。',
+      '商誉占权益比例是否继续提高。',
     ],
     formulas: [
       '资产负债率 = 总负债 / 总资产 × 100%',
@@ -426,10 +496,23 @@ function buildEfficiencyInsight(rows: FinancialPeriodMetrics[]): FinancialInsigh
     trend,
     tags,
     summary: `资产周转率为${current.assetTurnover?.toFixed(2) || '—'}，应收周转率为${current.receivableTurnover?.toFixed(2) || '—'}，运营效率${trend}。`,
+    decision: trend === '改善'
+      ? '资产和应收周转改善，说明经营效率有所提升。'
+      : trend === '恶化'
+        ? '运营效率走弱，可能意味着资产占用增加或收入释放变慢。'
+        : '运营效率整体平稳，暂未成为主要矛盾。',
+    impact: trend === '恶化'
+      ? '周转效率下降会拖累ROE，也可能加大现金流压力。'
+      : '效率稳定有助于维持盈利质量，但仍要结合收入和现金流一起看。',
     evidence: [
       deltaText('资产周转率', current.assetTurnover, prev?.assetTurnover ?? null, ''),
       deltaText('应收周转率', current.receivableTurnover, prev?.receivableTurnover ?? null, ''),
       deltaText('存货周转率', current.inventoryTurnover, prev?.inventoryTurnover ?? null, ''),
+    ],
+    watchList: [
+      '资产周转率是否连续下降。',
+      '应收周转率是否显著低于历史水平。',
+      '存货周转率下降是否伴随库存压力。',
     ],
     formulas: [
       '资产周转率 = 营业收入 / 平均总资产。',
@@ -477,10 +560,23 @@ function buildExpenseInsight(rows: FinancialPeriodMetrics[]): FinancialInsight {
     trend,
     tags,
     summary: `核心费用率为${pct(currentCore)}，研发费用率为${pct(rdRatio)}，费用控制${trend}。`,
+    decision: trend === '改善'
+      ? '核心费用率下降，费用控制对利润形成正向支撑。'
+      : level === '风险'
+        ? '核心费用率扩张较快，可能侵蚀利润，需要区分短期投入还是经营压力。'
+        : '费用控制整体稳定，研发投入变化需要结合业务阶段判断。',
+    impact: level === '风险'
+      ? '费用率持续上升会削弱净利率，并可能导致增收不增利。'
+      : '费用率稳定有助于利润率保持韧性。',
     evidence: [
       `销售费用率 ${pct(expenseRatio(current, 'salesExpense'))}，管理费用率 ${pct(expenseRatio(current, 'manageExpense'))}`,
       `研发费用率 ${pct(rdRatio)}，财务费用率 ${pct(expenseRatio(current, 'financeExpense'))}`,
       prevCore == null ? '暂无上期费用率对比' : `核心费用率较上期${currentCore - prevCore >= 0 ? '+' : ''}${(currentCore - prevCore).toFixed(1)}pct`,
+    ],
+    watchList: [
+      '销售和管理费用率是否继续上升。',
+      '研发费用率上升是否带来收入或毛利改善。',
+      '财务费用率是否反映债务压力。',
     ],
     formulas: [
       '单项费用率 = 单项费用 / 营业收入 × 100%。',
@@ -499,7 +595,10 @@ function emptyInsight(module: InsightModule, title: string): FinancialInsight {
     trend: '数据不足',
     tags: ['数据不足'],
     summary: '当前数据不足，暂无法形成稳定判断。',
+    decision: '数据不足时不输出投资判断，避免误导。',
+    impact: '建议先补齐财务数据后再观察趋势。',
     evidence: ['至少需要1期财务指标，趋势判断建议3期以上。'],
+    watchList: ['补齐年度或季度财务指标。'],
     formulas: ['规则引擎只使用本地已下载财务指标，不使用AI编造缺失数据。'],
     severity: 2,
   }
@@ -513,14 +612,81 @@ function lifecycle(insights: Record<InsightModule, FinancialInsight>) {
   return '稳定观察期'
 }
 
-function headline(insights: Record<InsightModule, FinancialInsight>, score: FinancialScorePoint | null) {
-  const parts = [
-    `增长${insights.growth.trend}`,
-    `盈利${insights.profitability.trend}`,
-    `现金流${insights.cashflow.level}`,
-    `资产安全${insights.safety.level}`,
-  ]
-  return `公司状态：${parts.join('，')}，综合评分${score ? `${score.score}（${score.rating}）` : '—'}。`
+function investmentType(insights: Record<InsightModule, FinancialInsight>, stage: string) {
+  if (insights.growth.tags.includes('高增长') && insights.profitability.level !== '风险') return '高速成长型'
+  if (insights.cashflow.level === '优秀' && insights.growth.trend !== '改善') return '现金牛型'
+  if (stage === '成熟期' && insights.safety.level !== '风险') return '成熟白马型'
+  if (stage === '承压期' && insights.safety.level === '风险') return '高风险承压型'
+  if (stage === '承压期') return '周期/经营承压型'
+  if (stage === '修复期') return '基本面修复型'
+  return '均衡观察型'
+}
+
+function riskReasons(insights: Record<InsightModule, FinancialInsight>) {
+  const reasons: string[] = []
+  if (insights.growth.tags.includes('利润拐点')) reasons.push('净利润增速出现拐点')
+  if (insights.growth.tags.includes('增收不增利')) reasons.push('收入增长未传导到利润')
+  if (insights.profitability.trend === '恶化') reasons.push('ROE或净利率连续走弱')
+  if (insights.cashflow.level === '风险') reasons.push('利润现金支撑不足')
+  if (insights.cashflow.trend === '恶化') reasons.push('自由现金流趋势恶化')
+  if (insights.safety.level === '风险') reasons.push('资产负债率偏高')
+  if (insights.efficiency.trend === '恶化') reasons.push('运营效率下降')
+  if (insights.expense.level === '风险') reasons.push('核心费用率扩张较快')
+  return reasons
+}
+
+function riskLevelFrom(reasons: string[], insights: Record<InsightModule, FinancialInsight>): '低' | '中' | '高' {
+  const severeCount = Object.values(insights).filter((item) => item.severity === 3).length
+  if (severeCount >= 2 || reasons.length >= 4) return '高'
+  if (severeCount === 1 || reasons.length >= 2) return '中'
+  return '低'
+}
+
+function buildCrossFindings(insights: Record<InsightModule, FinancialInsight>) {
+  const findings: string[] = []
+  if ((insights.growth.trend === '拐点' || insights.growth.trend === '放缓') && insights.cashflow.level !== '风险') {
+    findings.push('增长和盈利正在承压，但现金流尚未同步失控，当前更像盈利压力而不是流动性危机。')
+  }
+  if (insights.growth.tags.includes('增收不增利') && insights.expense.level === '风险') {
+    findings.push('增收不增利同时叠加费用率扩张，利润被费用侵蚀的可能性较高。')
+  }
+  if (insights.profitability.trend === '恶化' && insights.efficiency.trend === '恶化') {
+    findings.push('盈利能力和运营效率同步走弱，ROE下行可能不只是利润率问题，也可能来自资产周转变慢。')
+  }
+  if (insights.cashflow.level === '优秀' && insights.safety.level !== '风险') {
+    findings.push('现金流和资产安全性形成支撑，公司短期抗风险能力较好。')
+  }
+  if (insights.cashflow.level === '风险' && insights.safety.level === '风险') {
+    findings.push('现金流和资产安全同时偏弱，需要优先排查偿债压力和经营现金回款。')
+  }
+  if (findings.length === 0) findings.push('各模块暂未形成强烈共振信号，建议继续观察趋势变化。')
+  return findings
+}
+
+function buildWatchList(insights: Record<InsightModule, FinancialInsight>) {
+  const items: string[] = []
+  if (insights.growth.trend === '拐点' || insights.growth.trend === '放缓') items.push('利润YoY能否恢复，收入增长是否继续放缓。')
+  if (insights.profitability.trend === '恶化') items.push('ROE和净利率是否止跌。')
+  if (insights.cashflow.level !== '优秀' || insights.cashflow.trend === '恶化') items.push('CFO/净利润是否回到1以上，自由现金流是否保持为正。')
+  if (insights.safety.level === '风险' || insights.safety.trend === '恶化') items.push('资产负债率、应收账款、存货是否继续抬升。')
+  if (insights.expense.level === '风险') items.push('销售/管理/财务费用率是否继续侵蚀利润。')
+  if (items.length < 3) {
+    Object.values(insights).forEach((insight) => {
+      insight.watchList.forEach((item) => {
+        if (items.length < 5 && !items.includes(item)) items.push(item)
+      })
+    })
+  }
+  return items.slice(0, 5)
+}
+
+function headline(insights: Record<InsightModule, FinancialInsight>, score: FinancialScorePoint | null, stage: string, risk: '低' | '中' | '高') {
+  return `核心判断：公司处于${stage}，增长${insights.growth.trend}，盈利${insights.profitability.trend}，现金流${insights.cashflow.level}，风险等级${risk}，综合评分${score ? `${score.score}（${score.rating}）` : '—'}。`
+}
+
+function conclusionText(stage: string, risk: '低' | '中' | '高', type: string, crossFindings: string[]) {
+  const riskText = risk === '高' ? '需要谨慎，优先排查财务压力。' : risk === '中' ? '短期有压力，但仍需结合后续披露确认。' : '暂未出现明显财务红灯。'
+  return `总体：当前更接近“${type}”，处于${stage}。${riskText}${crossFindings[0] ? ` ${crossFindings[0]}` : ''}`
 }
 
 export function analyzeFinancialInsights(rows: FinancialPeriodMetrics[]): FinancialInsightResult {
@@ -528,7 +694,7 @@ export function analyzeFinancialInsights(rows: FinancialPeriodMetrics[]): Financ
   const recent = latestRows(sorted, 8)
   const scorePoints = scoreRows(sorted)
   const currentScore = last(scorePoints)
-  const insights = {
+  const insights: Record<InsightModule, FinancialInsight> = {
     growth: buildGrowthInsight(recent),
     profitability: buildProfitabilityInsight(recent),
     cashflow: buildCashflowInsight(recent),
@@ -537,19 +703,26 @@ export function analyzeFinancialInsights(rows: FinancialPeriodMetrics[]): Financ
     expense: buildExpenseInsight(recent),
   }
   const stage = lifecycle(insights)
-  const warningTags = Object.values(insights).flatMap((item) => item.tags).filter((tag) => ['增收不增利', '利润拐点', '利润含金量低', 'FCF为负', '高负债', '效率下降', '费用扩张'].includes(tag))
+  const reasons = riskReasons(insights)
+  const risk = riskLevelFrom(reasons, insights)
+  const type = investmentType(insights, stage)
+  const crossFindings = buildCrossFindings(insights)
+  const watchList = buildWatchList(insights)
   const keyFindings = [
-    insights.growth.summary,
-    insights.profitability.summary,
-    insights.cashflow.summary,
-    insights.safety.summary,
+    insights.growth.decision,
+    insights.profitability.decision,
+    insights.cashflow.decision,
+    insights.safety.decision,
   ]
   return {
-    headline: headline(insights, currentScore),
-    conclusion: warningTags.length > 0
-      ? `当前处于${stage}，需要重点复核：${warningTags.slice(0, 4).join('、')}。`
-      : `当前处于${stage}，核心财务信号未出现明显异常。`,
+    headline: headline(insights, currentScore, stage, risk),
+    conclusion: conclusionText(stage, risk, type, crossFindings),
     lifecycle: stage,
+    riskLevel: risk,
+    riskReasons: reasons.length ? reasons : ['核心财务信号未触发明显风险规则'],
+    investmentType: type,
+    crossFindings,
+    watchList,
     keyFindings,
     insights,
     score: {

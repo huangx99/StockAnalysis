@@ -23,6 +23,8 @@ import type {
   ScreenerInsight,
   FormulaFieldMeta,
   FormulaGenerateResponse,
+  IndustryListResponse,
+  IndustryCompareResponse,
 } from '../../types';
 
 const BASE = '/api';
@@ -197,6 +199,30 @@ export async function saveAIConfig(config: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
   });
+}
+
+
+export async function getIndustryList(): Promise<IndustryListResponse> {
+  return request(`${BASE}/industry/industries`);
+}
+
+export async function rebuildIndustrySnapshot(): Promise<IndustryListResponse> {
+  return request(`${BASE}/industry/industries/rebuild`, { method: 'POST' });
+}
+
+export async function getIndustryCompare(params: {
+  industry: string;
+  period?: 'annual' | 'quarter';
+  q?: string;
+  completeOnly?: boolean;
+  limit?: number;
+}): Promise<IndustryCompareResponse> {
+  const qs = new URLSearchParams({ industry: params.industry });
+  if (params.period) qs.set('period', params.period);
+  if (params.q) qs.set('q', params.q);
+  if (params.completeOnly != null) qs.set('completeOnly', String(params.completeOnly));
+  if (params.limit) qs.set('limit', String(params.limit));
+  return request(`${BASE}/industry/compare?${qs}`);
 }
 
 // Data management
