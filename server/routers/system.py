@@ -1,4 +1,5 @@
 import json
+import math
 from collections import Counter
 from functools import lru_cache
 from datetime import datetime
@@ -28,6 +29,16 @@ LOCAL_DATA_TYPE_LABELS = {
 }
 REQUIRED_LOCAL_DATA_TYPES = tuple(LOCAL_DATA_TYPE_LABELS.keys())
 INDUSTRY_SNAPSHOT_FILE = Path(__file__).parent.parent / "data" / "industry_snapshot.json"
+
+
+def _json_safe(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _get_missing_data_types(stock: dict) -> list[str]:
@@ -310,19 +321,19 @@ async def industry_compare(
             "symbol": symbol,
             "name": name,
             "industry": stock_industry,
-            "profile": profile or _profile_for_symbol(symbol, _load_stock_name_map()),
-            "periods": periods,
+            "profile": _json_safe(profile or _profile_for_symbol(symbol, _load_stock_name_map())),
+            "periods": _json_safe(periods),
             "hasFinancialData": len(periods) > 0,
         })
         if len(peers) >= limit:
             break
-    return {
+    return _json_safe({
         "industry": industry,
         "period": period,
         "updatedAt": snapshot.get("updatedAt"),
         "total": len(peers),
         "items": peers,
-    }
+    })
 
 
 @router.get("/system/data-stocks")

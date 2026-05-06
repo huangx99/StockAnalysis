@@ -1,0 +1,152 @@
+{
+  "000630": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 85,
+    "resources": ["铜", "金", "银"],
+    "tags": ["有色资源", "价格驱动", "强周期"]
+  },
+  "000657": {
+    "companyType": "周期制造混合型",
+    "cyclicExposure": 65,
+    "resources": ["钨", "硬质合金"],
+    "tags": ["钨产业链", "深加工", "央企背景"]
+  },
+  "000831": {
+    "companyType": "周期制造混合型",
+    "cyclicExposure": 70,
+    "resources": ["稀土", "磁材"],
+    "tags": ["稀土", "磁材", "资源+材料"]
+  },
+  "000878": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 90,
+    "resources": ["铜"],
+    "tags": ["铜资源", "价格驱动", "强周期"]
+  },
+  "000933": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["煤炭", "铝"],
+    "tags": ["能源资源", "周期资源"]
+  },
+  "000960": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 92,
+    "resources": ["锡"],
+    "tags": ["锡资源", "价格驱动", "强周期"]
+  },
+  "002149": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 82,
+    "resources": ["锗", "镓"],
+    "tags": ["小金属", "价格驱动"]
+  },
+  "002155": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 78,
+    "resources": ["锑", "钨"],
+    "tags": ["小金属", "资源周期"]
+  },
+  "002167": {
+    "companyType": "周期制造混合型",
+    "cyclicExposure": 70,
+    "resources": ["东方锆", "核级材料"],
+    "tags": ["小金属", "材料制造"]
+  },
+  "002378": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 86,
+    "resources": ["钨"],
+    "tags": ["钨资源", "价格驱动", "周期弹性"]
+  },
+  "002428": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["锂"],
+    "tags": ["能源金属", "锂资源", "强周期"]
+  },
+  "002466": {
+    "companyType": "周期制造混合型",
+    "cyclicExposure": 68,
+    "resources": ["锂", "锂盐"],
+    "tags": ["能源金属", "材料加工", "周期+制造"]
+  },
+  "002738": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 82,
+    "resources": ["钛", "锆"],
+    "tags": ["小金属", "价格驱动"]
+  },
+  "600111": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 90,
+    "resources": ["稀土", "氧化镨钕"],
+    "tags": ["稀土资源", "价格驱动", "强周期"]
+  },
+  "600301": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 94,
+    "resources": ["锡", "锌", "铅"],
+    "tags": ["锡资源", "价格驱动", "强周期", "周期弹性"]
+  },
+  "600362": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["铜", "金"],
+    "tags": ["铜资源", "黄金", "资源周期"]
+  },
+  "600392": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 82,
+    "resources": ["铅", "锌", "银"],
+    "tags": ["有色资源", "价格驱动"]
+  },
+  "600489": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["黄金"],
+    "tags": ["黄金资源", "避险属性", "周期资源"]
+  },
+  "600497": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 86,
+    "resources": ["钼"],
+    "tags": ["钼资源", "小金属", "价格驱动"]
+  },
+  "600549": {
+    "companyType": "周期制造混合型",
+    "cyclicExposure": 58,
+    "resources": ["钨", "稀土", "新能源材料"],
+    "tags": ["钨产业链", "深加工", "新能源材料", "周期+制造"]
+  },
+  "600988": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 84,
+    "resources": ["黄金", "铜"],
+    "tags": ["黄金资源", "铜资源", "周期资源"]
+  },
+  "601168": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 90,
+    "resources": ["铜"],
+    "tags": ["铜资源", "价格驱动", "强周期"]
+  },
+  "601600": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["铝", "氧化铝"],
+    "tags": ["铝资源", "价格驱动", "央企背景"]
+  },
+  "603799": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 88,
+    "resources": ["钴", "铜"],
+    "tags": ["能源金属", "钴资源", "强周期"]
+  },
+  "603993": {
+    "companyType": "周期资源型",
+    "cyclicExposure": 92,
+    "resources": ["铜", "钴", "钼"],
+    "tags": ["全球资源", "价格驱动", "强周期"]
+  }
+}

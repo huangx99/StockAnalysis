@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from routers import stocks, system, ai, screener
+from routers import stocks, system, ai, screener, backtest
 from utils.logging_config import setup_logging
 from services.stock_service import prewarm_spot_cache
 
@@ -48,6 +48,7 @@ app.include_router(stocks.router)
 app.include_router(ai.router)
 app.include_router(system.router)
 app.include_router(screener.router)
+app.include_router(backtest.router)
 
 
 @app.on_event("startup")

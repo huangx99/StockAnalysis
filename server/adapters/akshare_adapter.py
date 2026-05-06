@@ -107,14 +107,14 @@ def fetch_stock_info(symbol: str) -> pd.DataFrame:
     )
 
 
-def fetch_stock_news(symbol: str) -> pd.DataFrame:
+def fetch_stock_news(symbol: str, since_time: str | None = None) -> pd.DataFrame:
     """
     Fetch all stock news from EastMoney search API.
     Loops through all pages until the API returns empty results.
     Safety cap at 50 pages (5000 items) to prevent infinite loops.
     """
     MAX_PAGES = 200
-    logger.info("[adapter] calling stock_news for %s (all pages)...", symbol)
+    logger.info("[adapter] calling stock_news for %s (since=%s)...", symbol, since_time or "all")
     t0 = time.time()
 
     all_rows = []
@@ -129,7 +129,8 @@ def fetch_stock_news(symbol: str) -> pd.DataFrame:
     }
 
     page = 1
-    while page <= MAX_PAGES:
+    reached_existing = False
+    while page <= MAX_PAGES and not reached_existing:
         items = []
         inner_param = {
             "uid": "",
@@ -168,10 +169,14 @@ def fetch_stock_news(symbol: str) -> pd.DataFrame:
                 if not items:
                     break  # No more results
                 for item in items:
+                    pub_time = item.get("date", "") or ""
+                    if since_time and pub_time and pub_time <= since_time:
+                        reached_existing = True
+                        continue
                     all_rows.append({
                         "新闻标题": item.get("title", "").replace("<em>", "").replace("</em>", ""),
                         "新闻内容": (item.get("content", "") or "").replace("<em>", "").replace("</em>", ""),
-                        "发布时间": item.get("date", ""),
+                        "发布时间": pub_time,
                         "文章来源": item.get("mediaName", ""),
                         "新闻链接": f"http://finance.eastmoney.com/a/{item.get('code', '')}.html",
                         "关键词": symbol,
@@ -182,7 +187,7 @@ def fetch_stock_news(symbol: str) -> pd.DataFrame:
                 if attempt < 2:
                     time.sleep(1)
 
-        if not items:
+        if not items or reached_existing:
             break
         page += 1
         # Small delay between pages to be polite to the API
@@ -347,11 +352,11 @@ def fetch_dividend_data(symbol: str) -> pd.DataFrame | None:
         return None
 
 
-def fetch_stock_notices(symbol: str) -> pd.DataFrame | None:
+def fetch_stock_notices(symbol: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame | None:
     """Fetch company announcements via stock_zh_a_disclosure_report_cninfo (cninfo)."""
     try:
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = "20200101"  # Fetch all available since 2020
+        end_date = end_date or datetime.now().strftime("%Y%m%d")
+        start_date = start_date or "20200101"  # Fetch all available since 2020
         logger.info("[adapter] calling stock_zh_a_disclosure_report_cninfo(%s, %s, %s)...",
                     symbol, start_date, end_date)
         t0 = time.time()

@@ -1,8 +1,7 @@
 import asyncio
 import json
 import logging
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from adapters.akshare_adapter import (
@@ -39,30 +38,7 @@ DATA_TYPE_LABELS = {
 }
 PRIMARY_DATA_TYPES = tuple(DATA_TYPE_LABELS.keys())
 
-SKIP_EXISTING_DATA_TYPES = {"financials", "news", "dividends", "notices", "reports"}
-
 _single_download_state: dict | None = None
-
-
-def _stored_count(symbol: str, data_type: str) -> int:
-    local = data_store.load_stock_data(symbol, data_type)
-    if isinstance(local, list):
-        return len(local)
-    if isinstance(local, dict):
-        return 1
-    return 0
-
-
-def _has_stored_data(symbol: str, data_type: str) -> bool:
-    return data_store.has_stock_data(symbol, data_type)
-
-
-def _has_financial_bundle(symbol: str) -> bool:
-    return _has_stored_data(symbol, "financials") and _has_stored_data(symbol, "financial_periods")
-
-
-def _should_skip_existing(symbol: str, data_type: str, skip_existing: bool) -> bool:
-    return skip_existing and data_type in SKIP_EXISTING_DATA_TYPES and _has_stored_data(symbol, data_type)
 
 
 def get_missing_data_types(symbol: str) -> list[str]:
@@ -94,8 +70,112 @@ def _detect_market(code: str) -> str:
     return "SZ"
 
 
+def _normalize_date_value(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "nat"}:
+        return ""
+    text = text.replace("/", "-")
+    if "T" in text:
+        text = text.replace("T", " ")
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    if len(text) >= 14 and text[:14].isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]} {text[8:10]}:{text[10:12]}:{text[12:14]}"
+    return text[:19]
+
+
+def _date_only(value) -> str:
+    normalized = _normalize_date_value(value)
+    return normalized[:10] if len(normalized) >= 10 else normalized
+
+
+def _date_to_yyyymmdd(value: str | None, default: str = "20200101") -> str:
+    date_text = _date_only(value)
+    if len(date_text) == 10:
+        return date_text.replace("-", "")
+    return default
+
+
+def _max_record_date(records: list[dict], date_getter) -> str:
+    latest = ""
+    for record in records:
+        date_text = _normalize_date_value(date_getter(record))
+        if date_text > latest:
+            latest = date_text
+    return latest
+
+
+def _record_key(record: dict, key_fields: tuple[str, ...]) -> tuple:
+    return tuple(_normalize_date_value(record.get(field)) if "date" in field.lower() or "time" in field.lower() else record.get(field) for field in key_fields)
+
+
+def _merge_newer_records(
+    existing: list[dict],
+    fetched: list[dict],
+    date_getter,
+    key_fields: tuple[str, ...],
+    *,
+    descending: bool = True,
+) -> tuple[list[dict], int]:
+    latest = _max_record_date(existing, date_getter)
+    seen = {_record_key(record, key_fields) for record in existing}
+    new_records: list[dict] = []
+
+    for record in fetched:
+        record_date = _normalize_date_value(date_getter(record))
+        if latest and record_date and record_date <= latest:
+            continue
+        key = _record_key(record, key_fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        new_records.append(record)
+
+    merged = existing + new_records
+    merged.sort(key=lambda record: _normalize_date_value(date_getter(record)), reverse=descending)
+    return merged, len(new_records)
+
+
+def _load_list_data(symbol: str, data_type: str) -> list[dict]:
+    local = data_store.load_stock_data(symbol, data_type)
+    return local if isinstance(local, list) else []
+
+
+def _save_date_diff_records(
+    symbol: str,
+    data_type: str,
+    fetched: list[dict],
+    date_getter,
+    key_fields: tuple[str, ...],
+    *,
+    descending: bool = True,
+) -> tuple[list[dict], int]:
+    existing = _load_list_data(symbol, data_type)
+    if not existing:
+        merged = list(fetched)
+        merged.sort(key=lambda record: _normalize_date_value(date_getter(record)), reverse=descending)
+        data_store.save_stock_data(symbol, data_type, merged)
+        return merged, len(merged)
+
+    merged, new_count = _merge_newer_records(existing, fetched, date_getter, key_fields, descending=descending)
+    if new_count:
+        data_store.save_stock_data(symbol, data_type, merged)
+    return merged, new_count
+
+
+def _dividend_record_date(record: dict) -> str:
+    return record.get("exDate") or record.get("recordDate") or f"{record.get('year', '')}-12-31"
+
+
 async def _fetch_and_save_profile(symbol: str, name: str, spot_df=None) -> bool:
     try:
+        existing = data_store.load_stock_data(symbol, "profile")
+        today = datetime.now().strftime("%Y-%m-%d")
+        if isinstance(existing, dict) and _date_only(existing.get("updateTime")) >= today:
+            return 0
+
         if spot_df is None:
             spot_df = await asyncio.to_thread(fetch_all_stocks)
 
@@ -191,7 +271,7 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
             truly_new = [r for r in fetched_rows if r["date"] not in existing_dates]
             if not truly_new:
                 # Already up to date
-                return len(existing)
+                return 0
             merged = existing + truly_new
             # Recalculate MAs for the last 60 rows (boundary may shift)
             closes_all = [r["close"] for r in merged]
@@ -203,7 +283,7 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
                     else:
                         merged[j][key] = round(sum(closes_all[j - n + 1: j + 1]) / n, 2)
             data_store.save_stock_data(symbol, f"kline_{period}", merged)
-            return len(merged)
+            return len(truly_new)
         else:
             data_store.save_stock_data(symbol, f"kline_{period}", fetched_rows)
             return len(fetched_rows)
@@ -214,6 +294,7 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
 
 async def _fetch_and_save_financials(symbol: str) -> int:
     try:
+        from models.stock import FinancialPeriodMetrics
         from services.stock_service import (
             _annual_legacy_from_periods,
             _assemble_financial_periods,
@@ -229,16 +310,49 @@ async def _fetch_and_save_financials(symbol: str) -> int:
         )
 
         if income_df is not None:
-            data_store.save_stock_data(symbol, "financial_income_raw", _records_from_df(income_df))
-            data_store.save_stock_data(symbol, "financial_balance_raw", _records_from_df(balance_df))
-            data_store.save_stock_data(symbol, "financial_cashflow_raw", _records_from_df(cashflow_df))
-            data_store.save_stock_data(symbol, "financial_indicator_raw", _records_from_df(indicator_df))
-            periods = _assemble_financial_periods(symbol, income_df, balance_df, cashflow_df, indicator_df)
-            summary = _build_financial_summary(symbol, periods)
-            data_store.save_stock_data(symbol, "financial_periods", [item.model_dump() for item in periods])
-            data_store.save_stock_data(symbol, "financial_summary", summary.model_dump())
-            data_store.save_stock_data(symbol, "financials", [item.model_dump() for item in _annual_legacy_from_periods(periods)])
-            return len(periods)
+            _save_date_diff_records(
+                symbol,
+                "financial_income_raw",
+                _records_from_df(income_df),
+                lambda record: record.get("REPORT_DATE"),
+                ("REPORT_DATE",),
+            )
+            _save_date_diff_records(
+                symbol,
+                "financial_balance_raw",
+                _records_from_df(balance_df),
+                lambda record: record.get("REPORT_DATE"),
+                ("REPORT_DATE",),
+            )
+            _save_date_diff_records(
+                symbol,
+                "financial_cashflow_raw",
+                _records_from_df(cashflow_df),
+                lambda record: record.get("REPORT_DATE"),
+                ("REPORT_DATE",),
+            )
+            _save_date_diff_records(
+                symbol,
+                "financial_indicator_raw",
+                _records_from_df(indicator_df),
+                lambda record: record.get("日期"),
+                ("日期",),
+            )
+
+            fetched_periods = [item.model_dump() for item in _assemble_financial_periods(symbol, income_df, balance_df, cashflow_df, indicator_df)]
+            merged_periods, new_count = _save_date_diff_records(
+                symbol,
+                "financial_periods",
+                fetched_periods,
+                lambda record: record.get("reportDate"),
+                ("reportDate",),
+            )
+            if new_count or not data_store.has_stock_data(symbol, "financial_summary"):
+                period_models = [FinancialPeriodMetrics(**item) for item in merged_periods]
+                summary = _build_financial_summary(symbol, period_models)
+                data_store.save_stock_data(symbol, "financial_summary", summary.model_dump())
+                data_store.save_stock_data(symbol, "financials", [item.model_dump() for item in _annual_legacy_from_periods(period_models)])
+            return new_count
 
         from services.stock_service import _assemble_financials
 
@@ -249,7 +363,8 @@ async def _fetch_and_save_financials(symbol: str) -> int:
         )
 
         if profit_df is None:
-            data_store.save_stock_data(symbol, "financials", [])
+            if not data_store.has_stock_data(symbol, "financials"):
+                data_store.save_stock_data(symbol, "financials", [])
             return 0
 
         profit_df = profit_df[profit_df["报告日"].astype(str).str.endswith("1231")]
@@ -258,17 +373,25 @@ async def _fetch_and_save_financials(symbol: str) -> int:
         if cashflow_df is not None:
             cashflow_df = cashflow_df[cashflow_df["报告日"].astype(str).str.endswith("1231")]
 
-        results = _assemble_financials(profit_df, balance_df, cashflow_df)
-        data_store.save_stock_data(symbol, "financials", [item.model_dump() for item in results])
-        return len(results)
+        results = [item.model_dump() for item in _assemble_financials(profit_df, balance_df, cashflow_df)]
+        _, new_count = _save_date_diff_records(
+            symbol,
+            "financials",
+            results,
+            lambda record: f"{record.get('year', '')}-12-31",
+            ("year",),
+        )
+        return new_count
     except Exception as e:
         logger.error("[download] financials %s failed: %s", symbol, e)
         return 0
 
 
 async def _fetch_and_save_news(symbol: str) -> int:
+    existing = _load_list_data(symbol, "news")
+    last_time = _max_record_date(existing, lambda record: record.get("publishTime"))
     try:
-        df = await asyncio.to_thread(fetch_stock_news, symbol)
+        df = await asyncio.to_thread(fetch_stock_news, symbol, last_time if existing else None)
         results = []
         for i, (_, row) in enumerate(df.iterrows()):
             title = str(row.get("新闻标题", ""))
@@ -293,7 +416,7 @@ async def _fetch_and_save_news(symbol: str) -> int:
                 doc_type = "report"
 
             results.append({
-                "id": f"news_{i}",
+                "id": f"news_{len(existing) + i}",
                 "title": title,
                 "type": doc_type,
                 "publishTime": pub_time,
@@ -305,13 +428,22 @@ async def _fetch_and_save_news(symbol: str) -> int:
                 "url": url,
             })
 
-        data_store.save_stock_data(symbol, "news", results)
-        return len(results)
+        _, new_count = _save_date_diff_records(
+            symbol,
+            "news",
+            results,
+            lambda record: record.get("publishTime"),
+            ("title", "publishTime"),
+        )
+        return new_count
     except Exception as e:
         message = str(e)
-        if "returned empty" in message:
+        if "returned empty" in message and not existing:
             data_store.save_stock_data(symbol, "news", [])
             logger.info("[download] news %s has no remote data; saved empty list", symbol)
+            return 0
+        if "returned empty" in message:
+            logger.info("[download] news %s has no date-diff updates", symbol)
             return 0
         logger.error("[download] news %s failed: %s", symbol, e)
         return 0
@@ -319,11 +451,10 @@ async def _fetch_and_save_news(symbol: str) -> int:
 
 async def _fetch_and_save_dividends(symbol: str) -> int:
     try:
-        from models.stock import DividendRecord
-
         df = await asyncio.to_thread(fetch_dividend_data, symbol)
         if df is None or df.empty:
-            data_store.save_stock_data(symbol, "dividends", [])
+            if not data_store.has_stock_data(symbol, "dividends"):
+                data_store.save_stock_data(symbol, "dividends", [])
             return 0
 
         results = []
@@ -342,18 +473,28 @@ async def _fetch_and_save_dividends(symbol: str) -> int:
                 "recordDate": str(row.get("股权登记日", "")),
             })
 
-        data_store.save_stock_data(symbol, "dividends", results)
-        return len(results)
+        _, new_count = _save_date_diff_records(
+            symbol,
+            "dividends",
+            results,
+            _dividend_record_date,
+            ("year", "exDate", "recordDate"),
+        )
+        return new_count
     except Exception as e:
         logger.error("[download] dividends %s failed: %s", symbol, e)
         return 0
 
 
 async def _fetch_and_save_notices(symbol: str) -> int:
+    existing = _load_list_data(symbol, "notices")
+    last_time = _max_record_date(existing, lambda record: record.get("publishTime"))
     try:
-        df = await asyncio.to_thread(fetch_stock_notices, symbol)
+        start_date = _date_to_yyyymmdd(last_time) if existing else None
+        df = await asyncio.to_thread(fetch_stock_notices, symbol, start_date)
         if df is None or df.empty:
-            data_store.save_stock_data(symbol, "notices", [])
+            if not existing:
+                data_store.save_stock_data(symbol, "notices", [])
             return 0
 
         results = []
@@ -371,9 +512,15 @@ async def _fetch_and_save_notices(symbol: str) -> int:
                 "code": str(row.get("代码", symbol)),
                 "name": str(row.get("简称", "")),
             })
-        results.sort(key=lambda x: x["publishTime"], reverse=True)
-        data_store.save_stock_data(symbol, "notices", results)
-        return len(results)
+
+        _, new_count = _save_date_diff_records(
+            symbol,
+            "notices",
+            results,
+            lambda record: record.get("publishTime"),
+            ("title", "publishTime"),
+        )
+        return new_count
     except Exception as e:
         logger.error("[download] notices %s failed: %s", symbol, e)
         return 0
@@ -383,7 +530,8 @@ async def _fetch_and_save_reports(symbol: str) -> int:
     try:
         df = await asyncio.to_thread(fetch_stock_reports, symbol)
         if df is None or df.empty:
-            data_store.save_stock_data(symbol, "reports", [])
+            if not data_store.has_stock_data(symbol, "reports"):
+                data_store.save_stock_data(symbol, "reports", [])
             return 0
 
         results = []
@@ -404,15 +552,21 @@ async def _fetch_and_save_reports(symbol: str) -> int:
                 "institution": str(row.get("机构", "")),
                 "industry": str(row.get("行业", "")),
             })
-        results.sort(key=lambda x: x["publishTime"], reverse=True)
-        data_store.save_stock_data(symbol, "reports", results)
-        return len(results)
+
+        _, new_count = _save_date_diff_records(
+            symbol,
+            "reports",
+            results,
+            lambda record: record.get("publishTime"),
+            ("title", "publishTime", "institution"),
+        )
+        return new_count
     except Exception as e:
         logger.error("[download] reports %s failed: %s", symbol, e)
         return 0
 
 
-async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None, skip_existing: bool = False) -> dict[str, int]:
+async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
     """Download all requested data types for a single stock. Returns {data_type: row_count}."""
     stats: dict[str, int] = {}
     for dt in data_types:
@@ -425,30 +579,15 @@ async def _download_single(symbol: str, name: str, data_types: list[str], spot_d
         elif dt == "kline_month":
             stats[dt] = await _fetch_and_save_kline(symbol, "month")
         elif dt == "financials":
-            if skip_existing and _has_financial_bundle(symbol):
-                stats[dt] = _stored_count(symbol, "financial_periods") or _stored_count(symbol, "financials")
-            else:
-                stats[dt] = await _fetch_and_save_financials(symbol)
+            stats[dt] = await _fetch_and_save_financials(symbol)
         elif dt == "news":
-            if _should_skip_existing(symbol, dt, skip_existing):
-                stats[dt] = _stored_count(symbol, dt)
-            else:
-                stats[dt] = await _fetch_and_save_news(symbol)
+            stats[dt] = await _fetch_and_save_news(symbol)
         elif dt == "dividends":
-            if _should_skip_existing(symbol, dt, skip_existing):
-                stats[dt] = _stored_count(symbol, dt)
-            else:
-                stats[dt] = await _fetch_and_save_dividends(symbol)
+            stats[dt] = await _fetch_and_save_dividends(symbol)
         elif dt == "notices":
-            if _should_skip_existing(symbol, dt, skip_existing):
-                stats[dt] = _stored_count(symbol, dt)
-            else:
-                stats[dt] = await _fetch_and_save_notices(symbol)
+            stats[dt] = await _fetch_and_save_notices(symbol)
         elif dt == "reports":
-            if _should_skip_existing(symbol, dt, skip_existing):
-                stats[dt] = _stored_count(symbol, dt)
-            else:
-                stats[dt] = await _fetch_and_save_reports(symbol)
+            stats[dt] = await _fetch_and_save_reports(symbol)
     return stats
 
 
@@ -499,7 +638,7 @@ async def _download_single_with_progress(symbol: str, name: str, data_types: lis
             stats[dt] = count
             _single_download_state["completedTypes"].append({"type": dt, "count": count})
             label = DATA_TYPE_LABELS.get(dt, dt)
-            _append_log(logs, f"{label}: {count} 条 ✓" if count > 0 else f"{label}: 无数据")
+            _append_log(logs, f"{label}: {count} 条 ✓" if count > 0 else f"{label}: 无新增")
 
         _single_download_state["status"] = "completed"
         _single_download_state["updatedAt"] = datetime.now().isoformat()
@@ -522,7 +661,7 @@ def get_single_download_status() -> dict:
     return _single_download_state
 
 
-async def _run_download(symbols: list[dict], data_types: list[str], resume_from: str | None = None, skip_existing: bool = False):
+async def _run_download(symbols: list[dict], data_types: list[str], resume_from: str | None = None):
     global _stop_flag
     _stop_flag = False
     install_default_executor()
@@ -554,8 +693,8 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
 
     concurrency = min(STOCK_DOWNLOAD_CONCURRENCY, max(1, len(pending_symbols))) if pending_symbols else 1
     logger.info(
-        "[download] starting concurrent: %d pending/%d stocks, concurrency=%d, threads=%d, types=%s, resume_from=%s, skip_existing=%s",
-        len(pending_symbols), total, concurrency, MAX_DOWNLOAD_THREADS, data_types, resume_from, skip_existing,
+        "[download] starting concurrent date-diff update: %d pending/%d stocks, concurrency=%d, threads=%d, types=%s, resume_from=%s",
+        len(pending_symbols), total, concurrency, MAX_DOWNLOAD_THREADS, data_types, resume_from,
     )
     _append_log(logs, f"开始并发下载 {len(pending_symbols)} 只股票，并发 {concurrency}，线程上限 {MAX_DOWNLOAD_THREADS}")
 
@@ -601,9 +740,9 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
                 _save_state("running", last_completed_symbol)
             try:
                 has_existing = data_store.has_stock_data(symbol, "profile")
-                stats = await _download_single(symbol, name, data_types, spot_df, skip_existing=skip_existing)
+                stats = await _download_single(symbol, name, data_types, spot_df)
                 parts = [f"{DATA_TYPE_LABELS.get(data_type, data_type)}:{count}" for data_type, count in stats.items() if count > 0]
-                summary = ", ".join(parts) if parts else "无数据"
+                summary = ", ".join(parts) if parts else "无新增"
                 tag = "更新" if has_existing else "下载"
                 async with state_lock:
                     completed += 1
@@ -698,7 +837,7 @@ async def start_download(data_types: list[str] | None = None) -> dict:
         "logs": state.get("logs", []) if resumed else [],
     })
 
-    _download_task = asyncio.create_task(_run_download(stock_list, data_types, resume_from, skip_existing=True))
+    _download_task = asyncio.create_task(_run_download(stock_list, data_types, resume_from))
     return {"status": "started", "total": len(stock_list), "resumeFrom": resume_from}
 
 

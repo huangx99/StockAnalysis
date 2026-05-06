@@ -25,17 +25,46 @@ import type {
   FormulaGenerateResponse,
   IndustryListResponse,
   IndustryCompareResponse,
+  BacktestRequest,
+  BacktestResponse,
 } from '../../types';
 
 const BASE = '/api';
+const LOCAL_BACKEND_BASE = 'http://127.0.0.1:1335/api';
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+function shouldRetryWithLocalBackend(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('Failed to fetch') ||
+    message.includes('NetworkError') ||
+    message.includes('API error 404') ||
+    message.includes('API_NOT_FOUND')
+  );
+}
+
+function localBackendUrl(url: string) {
+  if (!url.startsWith(BASE)) return null;
+  if (typeof window !== 'undefined' && window.location.origin === 'http://127.0.0.1:1335') return null;
+  return `${LOCAL_BACKEND_BASE}${url.slice(BASE.length)}`;
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`API error ${res.status}: ${body}`);
   }
   return res.json();
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  try {
+    return await fetchJson<T>(url, init);
+  } catch (error) {
+    const fallbackUrl = localBackendUrl(url);
+    if (!fallbackUrl || !shouldRetryWithLocalBackend(error)) throw error;
+    return fetchJson<T>(fallbackUrl, init);
+  }
 }
 
 export async function searchStocks(query: string): Promise<StockSearchResult[]> {
@@ -225,6 +254,15 @@ export async function getIndustryCompare(params: {
   return request(`${BASE}/industry/compare?${qs}`);
 }
 
+
+export async function runBacktestValidation(params: BacktestRequest): Promise<BacktestResponse> {
+  return request(`${BASE}/backtest/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
 // Data management
 
 export async function getDataStatus(): Promise<DownloadStatus> {
@@ -277,7 +315,7 @@ export async function downloadStockData(symbol: string): Promise<{ status: strin
   return request(`${BASE}/system/data/download/${symbol}`, { method: 'POST' });
 }
 
-export async function refreshAllData(): Promise<{ status: string; total?: number }> {
+export async function refreshAllData(): Promise<{ status: string; total?: number; message?: string }> {
   return request(`${BASE}/system/data-refresh-all`, { method: 'POST' });
 }
 

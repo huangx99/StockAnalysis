@@ -334,8 +334,19 @@ export default function DataManager() {
 
   const handleRefreshAll = async () => {
     setRefreshingAll(true)
-    try { await refreshAllData() } catch {}
-    setRefreshingAll(false)
+    try {
+      const res = await refreshAllData()
+      if (res.status === 'started' || res.status === 'already_running') {
+        await fetchBatchStatus()
+      }
+      if (res.status !== 'started') {
+        alert(res.message || '更新全部任务未启动，请查看后端日志')
+      }
+    } catch (e: any) {
+      alert(e?.message || '更新全部启动失败，请稍后重试')
+    } finally {
+      setRefreshingAll(false)
+    }
   }
 
   const handleRebuildLocalList = async () => {
@@ -408,7 +419,7 @@ export default function DataManager() {
             <AlertDialogHeader>
               <AlertDialogTitle>确认全量下载</AlertDialogTitle>
               <AlertDialogDescription>
-                将下载所有股票的全部数据类型（基本信息、日K线、财务数据、新闻公告等），耗时较长且会消耗较多网络流量。确定开始吗？
+                将按本地最新日期为所有股票补齐新增数据（基本信息、K线、财务、新闻公告、研报等），不会重新覆盖已有历史数据。首次下载仍会拉取完整数据，确定开始吗？
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -425,7 +436,7 @@ export default function DataManager() {
         <Button
           variant="outline"
           onClick={handleRefreshAll}
-          disabled={refreshingAll || total === 0}
+          disabled={refreshingAll || batchStatus?.status === 'running' || total === 0}
         >
           <RefreshCw className={`w-4 h-4 mr-1.5 ${refreshingAll ? 'animate-spin' : ''}`} /> 更新全部
         </Button>
@@ -444,7 +455,8 @@ export default function DataManager() {
               {batchStatus.status === 'running' && <Loader2 className="w-3.5 h-3.5 inline animate-spin mr-1.5" />}
               {batchStatus.status === 'completed' && <CheckCircle className="w-3.5 h-3.5 inline mr-1.5" style={{ color: 'var(--up-red)' }} />}
               {batchStatus.status === 'paused' && <Pause className="w-3.5 h-3.5 inline mr-1.5" />}
-              全量下载 {batchStatus.status === 'running' ? '进行中' : batchStatus.status === 'completed' ? '已完成' : '已暂停'}
+              {batchStatus.status === 'error' && <XCircle className="w-3.5 h-3.5 inline mr-1.5" style={{ color: 'var(--down-green)' }} />}
+              批量任务 {batchStatus.status === 'running' ? '进行中' : batchStatus.status === 'completed' ? '已完成' : batchStatus.status === 'error' ? '失败' : '已暂停'}
             </span>
             <div className="flex items-center gap-2">
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>

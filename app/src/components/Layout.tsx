@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import Navbar from './Navbar'
 import Sidebar from './Sidebar'
 import Footer from './Footer'
+import KeepAliveOutlet from './KeepAliveOutlet'
 import { useIsMobile } from '@/hooks/use-mobile'
 
 export default function Layout() {
@@ -44,7 +45,7 @@ export default function Layout() {
 
         <main className="flex-1 flex flex-col overflow-y-auto">
           <div className="flex-1">
-            <Outlet />
+            <KeepAliveOutlet />
           </div>
           <Footer />
         </main>

@@ -246,7 +246,7 @@ export interface SystemStatus {
 }
 
 export interface DownloadStatus {
-  status: 'idle' | 'running' | 'paused' | 'completed';
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
   total: number;
   completed: number;
   failed: string[];
@@ -521,4 +521,94 @@ export interface MarketDataSummary {
     summary: string;
     checks: Record<string, unknown>[];
   } | null;
+}
+
+export interface BacktestRequest {
+  industry?: string | null;
+  asOfDate: string;
+  endDate: string;
+  topN: number;
+  scoreMode: 'composite' | 'opportunity' | 'quality' | 'growth' | 'profitability' | 'cashflow' | 'safety' | 'efficiency' | 'valuation';
+  formula?: string | null;
+  sortFormula?: string | null;
+  sortDir?: 'asc' | 'desc';
+  rebalanceFrequency?: 'none' | 'quarter';
+  benchmark?: 'industry_equal' | 'all_a_equal';
+  minPeriods?: number;
+  maxSymbols?: number;
+}
+
+export interface BacktestStockRow {
+  symbol: string;
+  name: string;
+  industry: string;
+  score: number;
+  scoreBreakdown: Record<string, number>;
+  latestPeriod: string;
+  formulaSortValue?: number | null;
+  formulaValues?: Record<string, unknown>;
+  startDate: string;
+  endDate: string;
+  startPrice: number;
+  endPrice: number;
+  returnPct: number;
+  maxDrawdown: number;
+  excessReturn: number;
+  horizons: Record<string, number | null>;
+  reasons: string[];
+}
+
+export interface BacktestPortfolioMetrics {
+  avgReturn: number;
+  medianReturn: number;
+  winRate: number;
+  avgExcess: number;
+  maxDrawdown: number;
+  count: number;
+  benchmarkReturn?: number;
+}
+
+export interface BacktestGroupSummary extends BacktestPortfolioMetrics {
+  group: string;
+}
+
+export interface BacktestFactorValidation {
+  factor: string;
+  rankIc: number;
+  topAvgReturn: number;
+  topWinRate: number;
+}
+
+export interface BacktestRollingPoint {
+  asOfDate: string;
+  endDate: string;
+  avgReturn: number;
+  benchmarkReturn: number;
+  avgExcess: number;
+  rankIc: number;
+  count: number;
+}
+
+export interface BacktestResponse {
+  params: BacktestRequest;
+  asOfDate: string;
+  endDate: string;
+  universeCount: number;
+  benchmarkReturn: number;
+  topPortfolio: BacktestPortfolioMetrics;
+  allPortfolio: BacktestPortfolioMetrics;
+  rankIc: number;
+  topRows: BacktestStockRow[];
+  allRows: BacktestStockRow[];
+  groups: {
+    top: BacktestStockRow[];
+    middle: BacktestStockRow[];
+    bottom: BacktestStockRow[];
+    summary: BacktestGroupSummary[];
+  };
+  factorValidation: BacktestFactorValidation[];
+  mistakes: BacktestStockRow[];
+  insights: string[];
+  rolling: BacktestRollingPoint[];
+  generatedAt: string;
 }

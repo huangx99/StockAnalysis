@@ -8,6 +8,7 @@ import DataManager from './pages/DataManager'
 import MarketDataManager from './pages/MarketDataManager'
 import Screener from './pages/Screener'
 import IndustryCompare from './pages/IndustryCompare'
+import BacktestValidation from './pages/BacktestValidation'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/market" element={<MarketDataManager />} />
         <Route path="/screener" element={<Screener />} />
         <Route path="/industry" element={<IndustryCompare />} />
+        <Route path="/backtest" element={<BacktestValidation />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
