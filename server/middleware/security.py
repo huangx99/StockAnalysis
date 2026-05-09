@@ -1,4 +1,4 @@
-"""Security middleware - rate limiting, auth guard, request monitoring, anti-abuse."""
+"""Security middleware - rate limiting, auth guard, brute-force protection, request monitoring."""
 
 from __future__ import annotations
 
@@ -19,6 +19,66 @@ logger = logging.getLogger(__name__)
 
 # Request log file
 REQUEST_LOG_FILE = Path(__file__).parent.parent / "data" / "request_log.jsonl"
+
+
+# ── Brute-force protection ──
+
+class _BruteForceGuard:
+    """Track failed login attempts per IP and per account, lock out after threshold."""
+
+    def __init__(
+        self,
+        max_attempts_per_ip: int = 5,
+        max_attempts_per_account: int = 5,
+        lockout_seconds: int = 300,
+    ) -> None:
+        self.max_per_ip = max_attempts_per_ip
+        self.max_per_account = max_attempts_per_account
+        self.lockout = lockout_seconds
+        # key=fail_ip:{ip} or key=fail_account:{account} -> list of failure timestamps
+        self._failures: dict[str, list[float]] = defaultdict(list)
+
+    def is_locked(self, ip: str, account: str) -> tuple[bool, str, int]:
+        """Check if IP or account is locked. Returns (locked, reason, retry_after)."""
+        now = time.monotonic()
+        cutoff = now - self.lockout
+
+        # Check IP lockout
+        ip_key = f"fail_ip:{ip}"
+        self._failures[ip_key] = [t for t in self._failures[ip_key] if t > cutoff]
+        if len(self._failures[ip_key]) >= self.max_per_ip:
+            retry = int(self._failures[ip_key][0] - cutoff) + 1
+            return True, "ip_locked", retry
+
+        # Check account lockout (if account provided)
+        if account:
+            acct_key = f"fail_account:{account.strip().lower()}"
+            self._failures[acct_key] = [t for t in self._failures[acct_key] if t > cutoff]
+            if len(self._failures[acct_key]) >= self.max_per_account:
+                retry = int(self._failures[acct_key][0] - cutoff) + 1
+                return True, "account_locked", retry
+
+        return False, "", 0
+
+    def record_failure(self, ip: str, account: str) -> None:
+        now = time.monotonic()
+        self._failures[f"fail_ip:{ip}"].append(now)
+        if account:
+            self._failures[f"fail_account:{account.strip().lower()}"].append(now)
+
+    def clear_account(self, account: str) -> None:
+        """Clear failures for an account (call on successful login)."""
+        if account:
+            self._failures.pop(f"fail_account:{account.strip().lower()}", None)
+
+    def cleanup(self, max_age: float = 600) -> None:
+        now = time.monotonic()
+        expired = [k for k, v in self._failures.items() if not v or now - v[-1] > max_age]
+        for k in expired:
+            del self._failures[k]
+
+
+_brute_guard = _BruteForceGuard()
 
 
 # ── Configuration ──
@@ -236,7 +296,41 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
         # Only enforce on /api/* paths
         if path.startswith("/api/"):
-            # 1. Rate limiting
+            # 0. Brute-force protection on login/register
+            login_account = ""
+            if path == "/api/auth/login" and method == "POST":
+                try:
+                    body = await request.body()
+                    data = json.loads(body)
+                    login_account = str(data.get("account", ""))
+                except Exception:
+                    pass
+                locked, reason, retry = _brute_guard.is_locked(client_ip, login_account)
+                if locked:
+                    detail = "登录尝试过多，请稍后再试" if reason == "ip_locked" else "该账号已被临时锁定，请稍后再试"
+                    logger.warning("Brute-force blocked: %s %s from %s (%s)", method, path, client_ip, reason)
+                    _log_request(datetime.now().isoformat(), client_ip, method, path,
+                                 user_id, 429, (time.monotonic() - t0) * 1000)
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": detail, "code": "BRUTE_FORCE_BLOCKED", "retryAfter": retry},
+                        headers={"Retry-After": str(retry)},
+                    )
+
+            if path == "/api/auth/register" and method == "POST":
+                rule = RateLimitRule(max_requests=3, window_seconds=300)
+                rate_key = f"{client_ip}:register"
+                allowed, retry_after = _limiter.is_allowed(rate_key, rule)
+                if not allowed:
+                    _log_request(datetime.now().isoformat(), client_ip, method, path,
+                                 user_id, 429, (time.monotonic() - t0) * 1000)
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "注册过于频繁，请稍后再试", "code": "RATE_LIMITED"},
+                        headers={"Retry-After": str(retry_after)},
+                    )
+
+            # 1. Rate limiting (general)
             rule = _match_rate_limit(path)
             rate_key = f"{client_ip}:{path}"
             allowed, retry_after = _limiter.is_allowed(rate_key, rule)
@@ -303,5 +397,13 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/"):
             _log_request(datetime.now().isoformat(), client_ip, method, path,
                          user_id, response.status_code, duration_ms)
+
+            # Record login failure / success for brute-force tracking
+            if path == "/api/auth/login" and method == "POST":
+                if response.status_code == 401:
+                    _brute_guard.record_failure(client_ip, login_account)
+                    logger.info("Login failed: account=%s ip=%s", login_account, client_ip)
+                elif response.status_code == 200:
+                    _brute_guard.clear_account(login_account)
 
         return response
