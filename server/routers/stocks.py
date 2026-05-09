@@ -136,6 +136,11 @@ async def proxy_notice(url: str = Query(...)):
     1. cninfo disclosure detail pages — uses cninfo API to get PDF URL
     2. Direct PDF/file URLs — downloads and serves directly
     """
+    from middleware.security import validate_proxy_url
+    ssrf_error = validate_proxy_url(url)
+    if ssrf_error:
+        return HTMLResponse(content=f"<p>{ssrf_error}</p>", status_code=403)
+
     fetch_headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     }
