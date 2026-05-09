@@ -7,6 +7,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -44,6 +45,36 @@ _REGULATOR_PAGES = [
         "url": "https://www.miit.gov.cn/zwgk/zcwj/",
         "tags": ["工信部", "产业政策"],
     },
+    {
+        "name": "金融监管总局",
+        "url": "https://www.cbirc.gov.cn/cn/view/pages/ItemList.html?itemPId=923&itemId=4115",
+        "tags": ["金融监管总局", "银行保险"],
+    },
+    {
+        "name": "财政部",
+        "url": "https://www.mof.gov.cn/zhengcefabu/",
+        "tags": ["财政部", "财政政策", "税收"],
+    },
+    {
+        "name": "商务部",
+        "url": "https://www.mofcom.gov.cn/article/zwgk/",
+        "tags": ["商务部", "贸易政策"],
+    },
+    {
+        "name": "统计局",
+        "url": "https://www.stats.gov.cn/sj/zxfb/",
+        "tags": ["统计局", "经济数据"],
+    },
+    {
+        "name": "住建部",
+        "url": "https://www.mohurd.gov.cn/gongkai/zhengce/zhengcefilelib/",
+        "tags": ["住建部", "房地产"],
+    },
+    {
+        "name": "人社部",
+        "url": "https://www.mohrss.gov.cn/SYrlzyhshbzb/zwgk/szcwdf/",
+        "tags": ["人社部", "就业", "社保"],
+    },
 ]
 
 
@@ -73,6 +104,87 @@ class GovProvider(NewsProvider):
             items.extend(regulator_items)
 
         return items[:limit]
+
+    async def search_news(self, keyword: str, limit: int = 20) -> list[RawNewsItem]:
+        """Search government policies by keyword."""
+        try:
+            loop = asyncio.get_event_loop()
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, self._search_sync, keyword, limit),
+                timeout=60,
+            )
+        except Exception as e:
+            self._logger.warning("Gov search(%s) failed: %s", keyword, e)
+            return []
+
+    def _search_sync(self, keyword: str, limit: int) -> list[RawNewsItem]:
+        """Search gov.cn and regulator sites for policy keyword."""
+        items: list[RawNewsItem] = []
+        keyword_lower = keyword.lower()
+
+        # 1. Search gov.cn via its search API
+        items.extend(self._search_gov_cn(keyword, limit))
+
+        # 2. Search each regulator page
+        for reg in _REGULATOR_PAGES:
+            try:
+                reg_items = self._scrape_regulator(reg, limit)
+                for item in reg_items:
+                    if keyword_lower in item.title.lower() or keyword_lower in item.content.lower():
+                        items.append(item)
+            except Exception:
+                pass
+
+        # Deduplicate by title
+        seen_titles: set[str] = set()
+        unique: list[RawNewsItem] = []
+        for item in items:
+            norm_title = re.sub(r'\s+', '', item.title)[:30]
+            if norm_title not in seen_titles:
+                seen_titles.add(norm_title)
+                unique.append(item)
+
+        unique.sort(key=lambda x: x.publish_time or datetime.min, reverse=True)
+        self._logger.info("Gov search '%s': %d results", keyword, len(unique[:limit]))
+        return unique[:limit]
+
+    def _search_gov_cn(self, keyword: str, limit: int) -> list[RawNewsItem]:
+        """Search gov.cn using its search endpoint."""
+        items: list[RawNewsItem] = []
+        try:
+            from urllib.parse import quote
+            url = f"https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary&q={quote(keyword)}&timetype=timeqb&mintime=&maxtime=&sort=pubtime&sortType=1&searchfield=title&pcodeJig498=&childtype=&subchildtype=&tsbq=&pubtimeyear=&puborg=&pcodeJig498=&pcodeJiguan=&searchfield=title&p=0&n={min(limit, 20)}&inpro=&bmfl=&dup=&orpro="
+            r = requests.get(url, headers=_HEADERS, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+
+            results = data.get("searchVO", {}).get("listVO", [])
+            for entry in results[:limit]:
+                title = entry.get("title", "").strip()
+                title = re.sub(r'<[^>]+>', '', title)  # strip HTML tags
+                if not title:
+                    continue
+
+                pub_time = None
+                pub_date = entry.get("pubtime", "")
+                if pub_date:
+                    try:
+                        pub_time = datetime.strptime(pub_date[:10], "%Y-%m-%d")
+                    except ValueError:
+                        pass
+
+                items.append(RawNewsItem(
+                    title=title,
+                    content=entry.get("summary", "") or title,
+                    source="国务院",
+                    url=entry.get("url", ""),
+                    publish_time=pub_time,
+                    tags=["国务院", "政策"],
+                    category="policy",
+                ))
+        except Exception as e:
+            logger.debug("Gov.cn search error: %s", e)
+        return items
 
     async def _fetch_json(
         self, url: str, source: str, limit: int
@@ -178,41 +290,101 @@ class GovProvider(NewsProvider):
             r.raise_for_status()
             html = r.text
 
-            # Generic pattern for Chinese gov site announcement lists
-            links = re.findall(
-                r'<a[^>]+href="([^"]*)"[^>]*>([^<]{6,})</a>',
-                html,
+            parsed_url = urlparse(reg["url"])
+
+            # Try structured list pattern first (common in gov sites)
+            # Look for <li> or <tr> blocks with links and dates
+            blocks = re.findall(
+                r'<li[^>]*>(.*?)</li>',
+                html, re.DOTALL
             )
+            if not blocks:
+                blocks = re.findall(
+                    r'<tr[^>]*>(.*?)</tr>',
+                    html, re.DOTALL
+                )
 
-            for href, title in links[:limit * 2]:
-                title = title.strip()
-                if not title or len(title) < 6:
-                    continue
-                # Skip navigation/footer links
-                if any(skip in title for skip in ["首页", "关于", "联系", "版权", "网站地图", "更多"]):
-                    continue
+            if blocks:
+                for block in blocks[:limit * 2]:
+                    link_match = re.search(
+                        r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>',
+                        block, re.DOTALL
+                    )
+                    if not link_match:
+                        continue
+                    href = link_match.group(1)
+                    title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+                    if not title or len(title) < 6:
+                        continue
+                    if any(skip in title for skip in ["首页", "关于", "联系", "版权", "网站地图", "更多", "下一页"]):
+                        continue
 
-                # Build absolute URL
-                if href.startswith("http"):
-                    url = href
-                elif href.startswith("/"):
-                    from urllib.parse import urlparse
-                    parsed = urlparse(reg["url"])
-                    url = f"{parsed.scheme}://{parsed.netloc}{href}"
-                else:
-                    continue
+                    # Extract date from the same block
+                    pub_time = None
+                    date_match = re.search(
+                        r'(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})',
+                        block
+                    )
+                    if date_match:
+                        try:
+                            pub_time = datetime(
+                                int(date_match.group(1)),
+                                int(date_match.group(2)),
+                                int(date_match.group(3)),
+                            )
+                        except ValueError:
+                            pass
 
-                items.append(RawNewsItem(
-                    title=title,
-                    content="",
-                    source=reg["name"],
-                    url=url,
-                    publish_time=datetime.now(),
-                    tags=reg["tags"],
-                    category="policy",
-                ))
-                if len(items) >= limit:
-                    break
+                    # Build absolute URL
+                    if href.startswith("http"):
+                        url = href
+                    elif href.startswith("/"):
+                        url = f"{parsed_url.scheme}://{parsed_url.netloc}{href}"
+                    else:
+                        continue
+
+                    items.append(RawNewsItem(
+                        title=title,
+                        content="",
+                        source=reg["name"],
+                        url=url,
+                        publish_time=pub_time,
+                        tags=reg["tags"],
+                        category="policy",
+                    ))
+                    if len(items) >= limit:
+                        break
+            else:
+                # Fallback: generic <a> tag extraction
+                links = re.findall(
+                    r'<a[^>]+href="([^"]*)"[^>]*>([^<]{6,})</a>',
+                    html,
+                )
+                for href, title in links[:limit * 2]:
+                    title = title.strip()
+                    if not title or len(title) < 6:
+                        continue
+                    if any(skip in title for skip in ["首页", "关于", "联系", "版权", "网站地图", "更多"]):
+                        continue
+
+                    if href.startswith("http"):
+                        url = href
+                    elif href.startswith("/"):
+                        url = f"{parsed_url.scheme}://{parsed_url.netloc}{href}"
+                    else:
+                        continue
+
+                    items.append(RawNewsItem(
+                        title=title,
+                        content="",
+                        source=reg["name"],
+                        url=url,
+                        publish_time=None,
+                        tags=reg["tags"],
+                        category="policy",
+                    ))
+                    if len(items) >= limit:
+                        break
 
             logger.info("Regulator %s: fetched %d items", reg["name"], len(items))
         except Exception as e:

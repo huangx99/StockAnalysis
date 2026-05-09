@@ -64,6 +64,8 @@ def get_field_value(item: dict, field: str):
         return item.get("publishTime", "")
     if field == "seenAt":
         return item.get("seenAt", _now_str())
+    if field == "category":
+        return item.get("category", "")
     return ""
 
 

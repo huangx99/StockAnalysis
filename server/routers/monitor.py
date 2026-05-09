@@ -47,6 +47,7 @@ RULE_GENERATE_SYSTEM = """你是一个新闻监控规则生成器。用户会用
 | content | 正文 | string | 新闻正文文本 |
 | source | 来源 | string | 如：东方财富、新浪财经 |
 | sentiment | 情绪 | enum | positive(利好) / neutral(中性) / negative(利空) |
+| category | 分类 | enum | policy(政策法规) / market(市场动态) / finance(财经新闻) / regulation(监管公告) / bulletin(政府公报) / directive(通知意见) / industry(行业资讯) / macro(宏观数据) |
 | importance | 重要度 | number | 0-100，越高越重要 |
 | sentimentScore | 情绪分数 | number | 0-100，>50偏利好，<50偏利空 |
 | topic | 话题 | string | 新闻话题标签 |
@@ -86,6 +87,9 @@ RULE_GENERATE_SYSTEM = """你是一个新闻监控规则生成器。用户会用
 | 某公司/股票名 | searchKeywords含该公司名 | — |
 | 政策/监管 | title或topic contains "政策" | — |
 | 不看/排除XX | title not_contains "XX" | — |
+| 政策法规 | category = "policy" | ~~title contains "政策"~~ |
+| 监管公告 | category = "regulation" | — |
+| 政府公报 | category = "bulletin" | — |
 
 ## 示例
 
@@ -144,6 +148,41 @@ RULE_GENERATE_SYSTEM = """你是一个新闻监控规则生成器。用户会用
     "conditions": [
       {"type": "condition", "field": "sentiment", "operator": "eq", "value": "positive"},
       {"type": "condition", "field": "title", "operator": "not_contains", "value": "研报"}
+    ]
+  }
+}
+
+用户："监控房地产政策变化"
+→ 政策类新闻，searchKeywords用政策实体词，conditionTree用category=policy
+{
+  "searchKeywords": ["房地产", "楼市", "住建部"],
+  "conditionTree": {
+    "type": "group", "logic": "AND",
+    "conditions": [
+      {"type": "condition", "field": "category", "operator": "eq", "value": "policy"}
+    ]
+  }
+}
+
+用户："央行货币政策动态"
+{
+  "searchKeywords": ["央行", "货币政策", "利率", "存款准备金"],
+  "conditionTree": {
+    "type": "group", "logic": "AND",
+    "conditions": [
+      {"type": "condition", "field": "category", "operator": "in", "value": "policy,regulation,bulletin,directive"}
+    ]
+  }
+}
+
+用户："科技行业政策利好"
+{
+  "searchKeywords": ["科技", "半导体", "人工智能"],
+  "conditionTree": {
+    "type": "group", "logic": "AND",
+    "conditions": [
+      {"type": "condition", "field": "category", "operator": "eq", "value": "policy"},
+      {"type": "condition", "field": "sentiment", "operator": "eq", "value": "positive"}
     ]
   }
 }
