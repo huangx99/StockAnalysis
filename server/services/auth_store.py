@@ -232,6 +232,11 @@ def list_users() -> list[UserPublic]:
     return [_public_user(user) for user in data["users"]]
 
 
+def count_users() -> int:
+    data = _load()
+    return len(data["users"])
+
+
 def update_user(user_id: str, updates: dict[str, Any]) -> UserPublic:
     data = _load()
     for user in data["users"]:

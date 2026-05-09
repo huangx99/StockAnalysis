@@ -206,6 +206,9 @@ def _is_public_path(path: str) -> bool:
 
 # ── Request Monitor ──
 
+_log_write_count = 0
+
+
 def _log_request(
     timestamp: str,
     client_ip: str,
@@ -215,7 +218,8 @@ def _log_request(
     status_code: int,
     duration_ms: float,
 ) -> None:
-    """Append a request record to the JSONL log file."""
+    """Append a request record to the JSONL log file, with auto-rotation."""
+    global _log_write_count
     record = {
         "ts": timestamp,
         "ip": client_ip,
@@ -227,6 +231,15 @@ def _log_request(
     }
     try:
         REQUEST_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # Rotate: if file exceeds 5MB, keep last 10000 lines
+        _log_write_count += 1
+        if _log_write_count % 500 == 0 and REQUEST_LOG_FILE.exists():
+            size_mb = REQUEST_LOG_FILE.stat().st_size / (1024 * 1024)
+            if size_mb > 5:
+                lines = REQUEST_LOG_FILE.read_text(encoding="utf-8").splitlines()
+                keep = lines[-10000:]
+                REQUEST_LOG_FILE.write_text("\n".join(keep) + "\n", encoding="utf-8")
+                logger.info("Rotated request log: kept %d of %d lines", len(keep), len(lines))
         with REQUEST_LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:

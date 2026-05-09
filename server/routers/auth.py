@@ -23,8 +23,15 @@ from services import auth_store
 router = APIRouter(prefix="/api", tags=["auth"])
 
 
+MAX_TOTAL_USERS = 50
+
+
 @router.post("/auth/register", response_model=AuthTokenResponse)
 async def register(body: AuthRegisterRequest):
+    current_count = auth_store.count_users()
+    if current_count >= MAX_TOTAL_USERS:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="注册已达上限，暂不开放新用户注册")
     user = auth_store.register_user(body.username, body.email, body.password)
     token = auth_store.create_access_token(user.id)
     return AuthTokenResponse(accessToken=token, expiresIn=auth_store.settings.auth_token_expire_minutes * 60, user=user)
