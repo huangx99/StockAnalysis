@@ -17,6 +17,7 @@ _SYMBOL_DIR_RE = re.compile(r"^\d{6}$")
 
 DATA_TYPES = [
     "profile", "kline_day", "kline_week", "kline_month",
+    "kline_1min", "kline_5min", "kline_15min", "kline_30min", "kline_60min",
     "financials", "news", "dividends", "notices", "reports",
     "financial_income_raw", "financial_balance_raw", "financial_cashflow_raw",
     "financial_indicator_raw", "financial_periods", "financial_summary",

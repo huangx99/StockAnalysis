@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { RotateCw, Star, Sparkles, Download, TrendingUp, TrendingDown } from 'lucide-react'
+import { RotateCw, Star, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react'
 import type { StockProfile } from '@/types'
 import { formatPrice, formatPercent, formatMarketCap } from '@/lib/formatters'
 import MetricTooltip from '@/components/common/MetricTooltip'
@@ -9,11 +8,48 @@ import MetricTooltip from '@/components/common/MetricTooltip'
 interface StockHeaderProps {
   profile: StockProfile
   onRefresh: () => void
+  isRefreshing?: boolean
+  refreshMessage?: string
   isFavorite: boolean
   onToggleFavorite: () => void
 }
 
-export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFavorite }: StockHeaderProps) {
+interface DataFreshness {
+  stale: boolean
+  reason: string
+}
+
+function parseUpdateTime(updateTime: string) {
+  const match = updateTime.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/)
+  if (!match) return null
+  const [, year, month, day, hour = '0', minute = '0', second = '0'] = match
+  const parsed = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second))
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function getDataFreshness(updateTime: string): DataFreshness {
+  const updatedAt = parseUpdateTime(updateTime)
+  if (!updatedAt) return { stale: true, reason: '缺少有效更新时间，请刷新数据' }
+
+  const now = new Date()
+  const sameDate = updatedAt.getFullYear() === now.getFullYear()
+    && updatedAt.getMonth() === now.getMonth()
+    && updatedAt.getDate() === now.getDate()
+  const ageMinutes = (now.getTime() - updatedAt.getTime()) / 60000
+  const weekday = now.getDay()
+  const minutesOfDay = now.getHours() * 60 + now.getMinutes()
+  const duringTrading = weekday >= 1 && weekday <= 5 && minutesOfDay >= 9 * 60 + 30 && minutesOfDay <= 15 * 60 + 30
+
+  if (!sameDate) {
+    return { stale: true, reason: `数据时间 ${updateTime}，不是当前日期，请刷新数据` }
+  }
+  if (duringTrading && ageMinutes > 30) {
+    return { stale: true, reason: `数据已 ${Math.floor(ageMinutes)} 分钟未更新，请刷新数据` }
+  }
+  return { stale: false, reason: '' }
+}
+
+export default function StockHeader({ profile, onRefresh, isRefreshing = false, refreshMessage = '', isFavorite, onToggleFavorite }: StockHeaderProps) {
   const isUp = profile.change >= 0
   const colorVar = isUp ? 'var(--up-red)' : 'var(--down-green)'
 
@@ -22,6 +58,7 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
     if (profile.market === 'SZ') return '深市主板'
     return profile.market
   }, [profile.market])
+  const dataFreshness = useMemo(() => getDataFreshness(profile.updateTime), [profile.updateTime])
 
   return (
     <motion.div
@@ -34,9 +71,24 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
         {/* Left column */}
         <div className="flex-1 min-w-0">
-          <h1 className="font-h1" style={{ color: 'var(--text-primary)' }}>
-            {profile.name}
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-h1" style={{ color: 'var(--text-primary)' }}>
+              {profile.name}
+            </h1>
+            {dataFreshness.stale && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                title={dataFreshness.reason}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium transition-all hover:scale-[1.02] disabled:opacity-70"
+                style={{ backgroundColor: 'var(--warning)26', color: 'var(--warning)' }}
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                数据需更新
+              </button>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-3 mt-1">
             <span
               className="font-data-md px-2 py-0.5 rounded"
@@ -120,12 +172,16 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
       <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border-subtle">
         <button
           onClick={onRefresh}
+          disabled={isRefreshing}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:scale-[1.02]"
-          style={{ color: 'var(--text-secondary)', backgroundColor: 'transparent' }}
+          style={{ color: 'var(--text-secondary)', backgroundColor: 'transparent', opacity: isRefreshing ? 0.65 : 1 }}
         >
-          <RotateCw className="w-4 h-4" />
-          刷新数据
+          <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          {isRefreshing ? '更新中' : '刷新数据'}
         </button>
+        {refreshMessage && (
+          <span className="text-xs" style={{ color: 'var(--accent-primary)' }}>{refreshMessage}</span>
+        )}
         <button
           onClick={onToggleFavorite}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:scale-[1.02]"
@@ -133,21 +189,6 @@ export default function StockHeader({ profile, onRefresh, isFavorite, onToggleFa
         >
           <Star className="w-4 h-4" fill={isFavorite ? '#F59E0B' : 'none'} />
           {isFavorite ? '已加自选' : '加入自选'}
-        </button>
-        <Link
-          to={`/stock/${profile.symbol}/report`}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-all hover:scale-[1.02]"
-          style={{ backgroundColor: 'var(--accent-primary)' }}
-        >
-          <Sparkles className="w-4 h-4" />
-          生成报告
-        </Link>
-        <button
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] border border-border-strong"
-          style={{ color: 'var(--text-primary)', backgroundColor: 'var(--bg-surface-hover)' }}
-        >
-          <Download className="w-4 h-4" />
-          导出PDF
         </button>
       </div>
     </motion.div>

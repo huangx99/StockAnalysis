@@ -14,11 +14,13 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2, Calendar } from 'lucide-react'
 import type { KLineData } from '@/types'
 
+type PeriodKey = 'day' | 'week' | 'month' | '1min' | '5min' | '15min' | '30min' | '60min'
+
 interface StockKLineChartProps {
   data: KLineData[]
   loading: boolean
-  period: 'day' | 'week' | 'month'
-  onPeriodChange: (p: 'day' | 'week' | 'month') => void
+  period: PeriodKey
+  onPeriodChange: (p: PeriodKey) => void
   onLoadAll: () => void
   hasFullData: boolean
 }
@@ -213,7 +215,14 @@ export default function StockKLineChart({
     { key: '1y', label: '近1年', months: 12 },
   ]
 
-  const periods: { key: 'day' | 'week' | 'month'; label: string }[] = [
+  const isMinutePeriod = period.endsWith('min')
+
+  const periods: { key: PeriodKey; label: string }[] = [
+    { key: '1min', label: '1分' },
+    { key: '5min', label: '5分' },
+    { key: '15min', label: '15分' },
+    { key: '30min', label: '30分' },
+    { key: '60min', label: '60分' },
     { key: 'day', label: '日K' },
     { key: 'week', label: '周K' },
     { key: 'month', label: '月K' },
@@ -252,63 +261,66 @@ export default function StockKLineChart({
           ))}
         </div>
 
-        {/* Preset buttons */}
-        <div className="flex items-center gap-1">
-          {presets.map((p) => (
-            <button
-              key={p.key}
-              onClick={() => applyPreset(p.months)}
-              className="px-2 py-1 rounded text-xs font-medium transition-all"
-              style={{
-                backgroundColor: 'transparent',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-subtle)',
-              }}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {/* Preset buttons & date range - hidden for minute periods */}
+        {!isMinutePeriod && (
+          <>
+            <div className="flex items-center gap-1">
+              {presets.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => applyPreset(p.months)}
+                  className="px-2 py-1 rounded text-xs font-medium transition-all"
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
 
-        {/* Date range inputs */}
-        <div className="flex items-center gap-2">
-          <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-          <input
-            type="date"
-            value={startDate}
-            onChange={handleStartChange}
-            min={dataBounds.first}
-            max={endDate || dataBounds.last}
-            className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
-            style={{
-              backgroundColor: 'var(--bg-base)',
-              color: 'var(--text-primary)',
-            }}
-          />
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>至</span>
-          <input
-            type="date"
-            value={endDate}
-            onChange={handleEndChange}
-            min={startDate || dataBounds.first}
-            max={dataBounds.last}
-            className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
-            style={{
-              backgroundColor: 'var(--bg-base)',
-              color: 'var(--text-primary)',
-            }}
-          />
-          <button
-            onClick={handleLoadAll}
-            className="px-2 py-1 rounded text-xs font-medium transition-all"
-            style={{
-              backgroundColor: !hasFullData ? 'var(--accent-secondary)26' : 'transparent',
-              color: 'var(--text-muted)',
-            }}
-          >
-            全部
-          </button>
-        </div>
+            <div className="flex items-center gap-2">
+              <Calendar className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+              <input
+                type="date"
+                value={startDate}
+                onChange={handleStartChange}
+                min={dataBounds.first}
+                max={endDate || dataBounds.last}
+                className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-base)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>至</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={handleEndChange}
+                min={startDate || dataBounds.first}
+                max={dataBounds.last}
+                className="px-2 py-1 rounded text-xs font-medium border border-border-subtle outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-base)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+              <button
+                onClick={handleLoadAll}
+                className="px-2 py-1 rounded text-xs font-medium transition-all"
+                style={{
+                  backgroundColor: !hasFullData ? 'var(--accent-secondary)26' : 'transparent',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                全部
+              </button>
+            </div>
+          </>
+        )}
 
         <div className="flex items-center gap-2">
           {maButtons.map((ma) => (

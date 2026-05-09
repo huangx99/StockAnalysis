@@ -132,7 +132,7 @@ export async function searchStocks(query: string): Promise<StockSearchResult[]> 
  * GET /api/stock/{symbol}/profile
  * Basic stock info, current price, metrics
  */
-export async function getStockProfile(symbol: string): Promise<StockProfile> {
+export async function getStockProfile(symbol: string, _refreshToken?: number): Promise<StockProfile> {
   await delay();
   const p = PROFILES[symbol];
   if (!p) throw new Error(`Stock ${symbol} not found`);
@@ -145,7 +145,9 @@ export async function getStockProfile(symbol: string): Promise<StockProfile> {
  */
 export async function getKLineData(
   symbol: string,
-  period: 'day' | 'week' | 'month' = 'day'
+  period: 'day' | 'week' | 'month' = 'day',
+  _limit = 0,
+  _refreshToken?: number,
 ): Promise<KLineData[]> {
   await delay(400, 900);
   const basePrice = PROFILES[symbol]?.currentPrice ?? 100;

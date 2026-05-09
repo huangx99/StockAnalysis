@@ -38,9 +38,11 @@ async def profile(symbol: str):
 @router.get("/stock/{symbol}/kline", response_model=list[KLineData])
 async def kline(
     symbol: str,
-    period: str = Query("day", pattern="^(day|week|month)$"),
+    period: str = Query("day", pattern="^(day|week|month|1min|5min|15min|30min|60min)$"),
     limit: int = Query(0, ge=0),
 ):
+    if period.endswith("min"):
+        return await stock_service.get_minute_kline_data(symbol, period, limit)
     return await stock_service.get_kline_data(symbol, period, limit)
 
 

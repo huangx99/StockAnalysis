@@ -10,6 +10,7 @@ import pandas as pd
 from adapters.akshare_adapter import fetch_all_stocks
 from services import market_data_store
 from services.download_executor import MAX_DOWNLOAD_THREADS, MARKET_DATE_CONCURRENCY, install_default_executor
+from services.data_sources import get_registry, DataCapability
 
 logger = logging.getLogger(__name__)
 

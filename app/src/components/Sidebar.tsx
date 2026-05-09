@@ -1,25 +1,41 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ChevronLeft, BarChart3, Newspaper, FileText, Settings, Heart, Database, Filter, Network, SearchCheck } from 'lucide-react'
+import { ChevronLeft, BarChart3, Newspaper, FileText, Settings, Heart, Database, Filter, Network, SearchCheck, Users, PieChart } from 'lucide-react'
 import { motion } from 'framer-motion'
+import type { LucideIcon } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
 
-const navItems = [
+interface NavItem {
+  icon: LucideIcon
+  label: string
+  to: string
+  active?: boolean
+  disabled?: boolean
+  badge?: string
+  adminOnly?: boolean
+}
+
+const navItems: NavItem[] = [
   { icon: BarChart3, label: '单股分析', to: '/', active: false },
   { icon: Filter, label: '股票筛选', to: '/screener', active: false },
   { icon: Network, label: '行业对比', to: '/industry', active: false },
+  { icon: PieChart, label: '板块资金', to: '/sector', active: false },
   { icon: SearchCheck, label: '回测验证', to: '/backtest', active: false },
-  { icon: Heart, label: '自选股', to: '#', disabled: true, badge: '即将上线' },
+  { icon: Heart, label: '自选股', to: '/watchlist', active: false },
   { icon: BarChart3, label: '财务分析', to: '#', disabled: true },
-  { icon: Newspaper, label: '公告新闻', to: '#', disabled: true },
+  { icon: Newspaper, label: '新闻监控', to: '/news', active: false },
   { icon: FileText, label: 'AI 研究报告', to: '#', disabled: true },
-  { icon: Database, label: '数据管理', to: '/data', active: false },
-  { icon: BarChart3, label: '市场总览', to: '/market', active: false },
-  { icon: Settings, label: '系统设置', to: '/settings', active: false },
+  { icon: Database, label: '数据管理', to: '/data', active: false, adminOnly: true },
+  { icon: BarChart3, label: '市场总览', to: '/market', active: false, adminOnly: true },
+  { icon: Users, label: '用户管理', to: '/users', active: false, adminOnly: true },
+  { icon: Settings, label: '系统设置', to: '/settings', active: false, adminOnly: true },
 ]
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const location = useLocation()
+  const { isAdmin } = useAuth()
+  const visibleNavItems = navItems.filter(item => !item.adminOnly || isAdmin)
 
   return (
     <motion.aside
@@ -29,7 +45,7 @@ export default function Sidebar() {
       style={{ backgroundColor: 'var(--bg-surface)' }}
     >
       <nav className="flex-1 py-3">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive = !item.disabled && (item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to.replace('/:symbol', '')))
           const Icon = item.icon
           return (

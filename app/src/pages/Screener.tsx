@@ -9,8 +9,8 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { runScreener, getIndustries, getFormulaFields, validateFormula, generateFormula, generateScreenerAiInsight } from '@/api/real/stockApi'
-import type { ScreenedStock, ScreenerResponse, ScreenerDiagnosis, FormulaFieldMeta, FormulaGenerateResponse, ScreenerInsight } from '@/types'
+import { runScreener, getIndustries, getFormulaFields, validateFormula, generateFormula, generateScreenerAiInsight, getTemplates, createTemplate, deleteTemplate } from '@/api/real/stockApi'
+import type { CalculationTemplate, ScreenedStock, ScreenerResponse, ScreenerDiagnosis, FormulaFieldMeta, FormulaGenerateResponse, ScreenerInsight } from '@/types'
 
 type Preset = 'consecutive_growth' | 'recent_strength' | 'profit_growth_rank' | 'custom'
 type ScreenerMode = 'all' | 'value' | 'trend'
@@ -60,6 +60,7 @@ const SORT_OPTIONS = [
 
 interface FilterTemplate {
   name: string
+  remoteId?: string
   category?: string
   mode?: CustomMode
   formula?: string
@@ -87,6 +88,24 @@ function loadTemplates(): FilterTemplate[] {
 
 function saveTemplates(ts: FilterTemplate[]) {
   localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(ts))
+}
+
+function templateFromRemote(template: CalculationTemplate): FilterTemplate | null {
+  const content = template.content as Partial<FilterTemplate>
+  if (!content || typeof content !== 'object' || !content.filters) return null
+  return {
+    name: template.name,
+    category: template.category || content.category || '默认',
+    mode: content.mode || (content.formula ? 'formula' : 'simple'),
+    formula: content.formula || '',
+    sortFormula: content.sortFormula || '',
+    formulaSortDir: content.formulaSortDir || 'desc',
+    aiStrategy: content.aiStrategy || null,
+    aiPreview: content.aiPreview || null,
+    resultInsight: content.resultInsight || null,
+    filters: content.filters,
+    remoteId: template.id,
+  } as FilterTemplate
 }
 
 function normalizeForCache(value: unknown): unknown {
@@ -572,6 +591,7 @@ export default function Screener() {
   const [selectedStocks, setSelectedStocks] = useState<Set<string>>(new Set())
   const [showCompare, setShowCompare] = useState(false)
   const [savedTemplates, setSavedTemplates] = useState<FilterTemplate[]>(() => loadTemplates())
+  const [templateSyncMessage, setTemplateSyncMessage] = useState('')
   const [templateName, setTemplateName] = useState('')
   const [tableQuery, setTableQuery] = useState('')
   const [appliedTableQuery, setAppliedTableQuery] = useState('')
@@ -582,6 +602,22 @@ export default function Screener() {
   useEffect(() => {
     getIndustries().then(res => { if (res.items) setIndustries(res.items) }).catch(() => {})
     getFormulaFields().then(res => { if (res.items) setFormulaFields(res.items) }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    getTemplates()
+      .then(remote => {
+        const mapped = remote
+          .filter(item => item.category === 'screener' || item.category === '默认' || item.category === '简单条件')
+          .map(templateFromRemote)
+          .filter((item): item is FilterTemplate => Boolean(item))
+        if (mapped.length > 0) {
+          setSavedTemplates(mapped)
+          saveTemplates(mapped)
+          setTemplateSyncMessage('已同步账号模板')
+        }
+      })
+      .catch(() => setTemplateSyncMessage('模板暂用本地缓存'))
   }, [])
 
   // Close industry dropdown on outside click
@@ -756,10 +792,24 @@ export default function Screener() {
     })
   }
 
-  const handleSaveTemplate = () => {
+  const handleSaveTemplate = async () => {
     const template = buildCurrentTemplate()
     if (!template) return
     persistTemplate(template)
+    try {
+      const remote = await createTemplate({
+        name: template.name,
+        description: '股票筛选计算模板',
+        templateType: 'private',
+        category: 'screener',
+        content: template as unknown as Record<string, unknown>,
+      })
+      const next = { ...template, remoteId: remote.id }
+      persistTemplate(next)
+      setTemplateSyncMessage('模板已保存到当前账号')
+    } catch {
+      setTemplateSyncMessage('模板已保存到本地，账号同步失败')
+    }
   }
 
   const handleLoadTemplate = (t: FilterTemplate) => {
@@ -906,10 +956,18 @@ export default function Screener() {
     setAiLoading(false)
   }
 
-  const handleDeleteTemplate = (name: string) => {
-    const newTemplates = savedTemplates.filter(t => t.name !== name)
+  const handleDeleteTemplate = async (template: FilterTemplate) => {
+    const newTemplates = savedTemplates.filter(t => t.name !== template.name)
     setSavedTemplates(newTemplates)
     saveTemplates(newTemplates)
+    if (template.remoteId) {
+      try {
+        await deleteTemplate(template.remoteId)
+        setTemplateSyncMessage('账号模板已删除')
+      } catch {
+        setTemplateSyncMessage('本地模板已删除，远端删除失败')
+      }
+    }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / 50))
@@ -1223,9 +1281,12 @@ export default function Screener() {
               placeholder="模板名称" value={templateName} onChange={e => setTemplateName(e.target.value)}
               className="h-8 text-xs w-28"
             />
-            <Button size="sm" variant="outline" onClick={handleSaveTemplate} disabled={!templateName.trim()}>
+            <Button size="sm" variant="outline" onClick={() => void handleSaveTemplate()} disabled={!templateName.trim()}>
               <Save className="w-3 h-3 mr-1" />保存{customMode === 'formula' ? '公式' : ''}
             </Button>
+            {templateSyncMessage && (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{templateSyncMessage}</span>
+            )}
             {savedTemplates.map(t => (
               <div key={t.name} className="flex items-center gap-0.5 rounded border px-1" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
@@ -1235,7 +1296,7 @@ export default function Screener() {
                   title={[t.formula, t.sortFormula ? `排序：${t.sortFormula}` : ''].filter(Boolean).join('；') || undefined}
                 >{t.category ? `${t.category} / ` : ''}{t.name}</button>
                 <button
-                  onClick={() => handleDeleteTemplate(t.name)}
+                  onClick={() => void handleDeleteTemplate(t)}
                   className="p-0.5 rounded hover:bg-bg-surface-hover"
                   style={{ color: 'var(--text-muted)' }}
                 ><Trash2 className="w-3 h-3" /></button>

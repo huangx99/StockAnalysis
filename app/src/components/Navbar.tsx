@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { Search, Sun, Moon, User, X, Menu } from 'lucide-react'
+import { LogOut, Search, Sun, Moon, User, X, Menu } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { searchStocks } from '@/api/real/stockApi'
+import { useAuth } from '@/contexts/AuthContext'
 import type { StockSearchResult } from '@/types'
 
 interface NavbarProps {
@@ -18,6 +19,7 @@ export default function Navbar({ showMenuButton, onMenuClick }: NavbarProps) {
   const [showDropdown, setShowDropdown] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const { user, logout } = useAuth()
 
   useEffect(() => {
     const html = document.documentElement
@@ -164,11 +166,23 @@ export default function Navbar({ showMenuButton, onMenuClick }: NavbarProps) {
             <span className="font-data-sm" style={{ color: 'var(--text-secondary)' }}>数据正常</span>
           </div>
 
-          <div className="w-8 h-8 rounded-full flex items-center justify-center"
-            style={{ backgroundColor: 'var(--bg-surface-hover)' }}
+          <Link to="/profile" className="hidden md:flex items-center gap-2 pl-2 rounded-lg hover:bg-bg-surface-hover transition-colors" title="个人中心">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--bg-surface-hover)' }}>
+              <User className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+            </div>
+            <div className="leading-tight hidden lg:block pr-2">
+              <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user?.username || '未登录'}</div>
+              <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{user?.role === 'admin' ? '管理员' : '普通用户'}</div>
+            </div>
+          </Link>
+          <button
+            onClick={logout}
+            className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-bg-surface-hover transition-colors"
+            aria-label="logout"
+            title="退出登录"
           >
-            <User className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-          </div>
+            <LogOut className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
+          </button>
         </div>
       </nav>
 

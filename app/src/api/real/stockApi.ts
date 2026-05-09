@@ -27,61 +27,44 @@ import type {
   IndustryCompareResponse,
   BacktestRequest,
   BacktestResponse,
+  AuthTokenResponse,
+  UserPublic,
+  Watchlist,
+  WatchlistItem,
+  CalculationTemplate,
+  TemplateType,
+  SectorOverviewResponse,
+  SectorBidAskResponse,
+  NewsSentimentOverview,
+  NewsSentimentItem,
+  SentimentTrend,
+  TopicCluster,
+  PaginatedNewsFeed,
 } from '../../types';
 
 const BASE = '/api';
-const LOCAL_BACKEND_BASE = 'http://127.0.0.1:1335/api';
 
-function shouldRetryWithLocalBackend(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes('Failed to fetch') ||
-    message.includes('NetworkError') ||
-    message.includes('API error 404') ||
-    message.includes('API_NOT_FOUND')
-  );
-}
-
-function localBackendUrl(url: string) {
-  if (!url.startsWith(BASE)) return null;
-  if (typeof window !== 'undefined' && window.location.origin === 'http://127.0.0.1:1335') return null;
-  return `${LOCAL_BACKEND_BASE}${url.slice(BASE.length)}`;
-}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API error ${res.status}: ${body}`);
-  }
-  return res.json();
-}
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  try {
-    return await fetchJson<T>(url, init);
-  } catch (error) {
-    const fallbackUrl = localBackendUrl(url);
-    if (!fallbackUrl || !shouldRetryWithLocalBackend(error)) throw error;
-    return fetchJson<T>(fallbackUrl, init);
-  }
-}
+export { getAuthToken, setAuthToken, request } from './client';
+import { request } from './client';
 
 export async function searchStocks(query: string): Promise<StockSearchResult[]> {
   return request(`${BASE}/search?q=${encodeURIComponent(query)}`);
 }
 
-export async function getStockProfile(symbol: string): Promise<StockProfile> {
-  return request(`${BASE}/stock/${symbol}/profile`);
+export async function getStockProfile(symbol: string, refreshToken?: number): Promise<StockProfile> {
+  const suffix = refreshToken ? `?_=${refreshToken}` : '';
+  return request(`${BASE}/stock/${symbol}/profile${suffix}`);
 }
 
 export async function getKLineData(
   symbol: string,
-  period: 'day' | 'week' | 'month' = 'day',
+  period: 'day' | 'week' | 'month' | '1min' | '5min' | '15min' | '30min' | '60min' = 'day',
   limit = 0,
+  refreshToken?: number,
 ): Promise<KLineData[]> {
   const params = new URLSearchParams({ period });
   if (limit > 0) params.set('limit', String(limit));
+  if (refreshToken) params.set('_', String(refreshToken));
   return request(`${BASE}/stock/${symbol}/kline?${params}`);
 }
 
@@ -311,8 +294,11 @@ export async function refreshMissingStockData(symbol: string): Promise<{ status:
   return request(`${BASE}/system/data/refresh-missing/${symbol}`, { method: 'POST' });
 }
 
-export async function downloadStockData(symbol: string): Promise<{ status: string; symbol: string; name?: string; message?: string }> {
-  return request(`${BASE}/system/data/download/${symbol}`, { method: 'POST' });
+export async function downloadStockData(symbol: string, dataTypes?: string[]): Promise<{ status: string; symbol: string; name?: string; message?: string; stats?: Record<string, number> }> {
+  const query = new URLSearchParams();
+  dataTypes?.forEach((dataType) => query.append('dataTypes', dataType));
+  const suffix = query.toString() ? `?${query}` : '';
+  return request(`${BASE}/system/data/download/${symbol}${suffix}`, { method: 'POST' });
 }
 
 export async function refreshAllData(): Promise<{ status: string; total?: number; message?: string }> {
@@ -498,5 +484,223 @@ export async function generateScreenerAiInsight(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ screenerRequest: params, fetchLinks, forceRefresh }),
+  });
+}
+
+export async function login(account: string, password: string): Promise<AuthTokenResponse> {
+  return request(`${BASE}/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({ account, password }),
+  });
+}
+
+export async function register(username: string, email: string, password: string): Promise<AuthTokenResponse> {
+  return request(`${BASE}/auth/register`, {
+    method: 'POST',
+    body: JSON.stringify({ username, email, password }),
+  });
+}
+
+export async function getCurrentUser(): Promise<UserPublic> {
+  return request(`${BASE}/auth/me`);
+}
+
+export async function updateCurrentUserProfile(body: { email?: string }): Promise<UserPublic> {
+  return request(`${BASE}/auth/me`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function changeCurrentUserPassword(currentPassword: string, newPassword: string): Promise<{ status: string }> {
+  return request(`${BASE}/auth/change-password`, {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
+export async function getUsers(): Promise<UserPublic[]> {
+  return request(`${BASE}/admin/users`);
+}
+
+export async function updateUser(userId: string, body: Partial<Pick<UserPublic, 'role' | 'isActive'>>): Promise<UserPublic> {
+  return request(`${BASE}/admin/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getWatchlists(): Promise<Watchlist[]> {
+  return request(`${BASE}/watchlists`);
+}
+
+export async function createWatchlist(name: string, description = ''): Promise<Watchlist> {
+  return request(`${BASE}/watchlists`, {
+    method: 'POST',
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function addWatchlistItem(body: {
+  stockCode: string;
+  stockName?: string;
+  market?: string;
+  note?: string;
+  tags?: string[];
+}): Promise<WatchlistItem> {
+  return request(`${BASE}/watchlist/items`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateWatchlistItem(itemId: string, body: { note?: string; tags?: string[]; sortOrder?: number }): Promise<WatchlistItem> {
+  return request(`${BASE}/watchlist/items/${itemId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteWatchlistItem(itemId: string): Promise<{ status: string }> {
+  return request(`${BASE}/watchlist/items/${itemId}`, { method: 'DELETE' });
+}
+
+export async function removeWatchlistSymbol(stockCode: string): Promise<{ status: string }> {
+  return request(`${BASE}/watchlist/symbol/${stockCode}`, { method: 'DELETE' });
+}
+
+export async function checkWatchlistSymbol(stockCode: string): Promise<{ isFavorite: boolean; items: WatchlistItem[] }> {
+  return request(`${BASE}/watchlist/check/${stockCode}`);
+}
+
+export async function getTemplates(): Promise<CalculationTemplate[]> {
+  return request(`${BASE}/templates`);
+}
+
+export async function createTemplate(body: {
+  name: string;
+  description?: string;
+  templateType?: TemplateType;
+  category?: string;
+  content?: Record<string, unknown>;
+}): Promise<CalculationTemplate> {
+  return request(`${BASE}/templates`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateTemplate(templateId: string, body: Partial<CalculationTemplate>): Promise<CalculationTemplate> {
+  return request(`${BASE}/templates/${templateId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteTemplate(templateId: string): Promise<{ status: string }> {
+  return request(`${BASE}/templates/${templateId}`, { method: 'DELETE' });
+}
+
+export async function copyTemplate(templateId: string): Promise<CalculationTemplate> {
+  return request(`${BASE}/templates/${templateId}/copy`, { method: 'POST' });
+}
+
+// ── Sector Analysis ──
+
+export async function getSectorOverview(): Promise<SectorOverviewResponse> {
+  return request(`${BASE}/sector/overview`);
+}
+
+export async function getSectorBidAsk(boardName: string, codes?: string): Promise<SectorBidAskResponse> {
+  const qs = codes ? `?codes=${encodeURIComponent(codes)}` : '';
+  return request(`${BASE}/sector/${encodeURIComponent(boardName)}/bidask${qs}`);
+}
+
+// ── News Sentiment ──
+
+export async function getNewsSentimentOverview(): Promise<NewsSentimentOverview> {
+  return request(`${BASE}/news/sentiment/overview`);
+}
+
+export async function getNewsSentimentFeed(params?: {
+  page?: number;
+  pageSize?: number;
+  sentiment?: string;
+  topic?: string;
+  source?: string;
+}): Promise<PaginatedNewsFeed> {
+  const query = new URLSearchParams();
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.pageSize) query.set('pageSize', String(params.pageSize));
+  if (params?.sentiment) query.set('sentiment', params.sentiment);
+  if (params?.topic) query.set('topic', params.topic);
+  if (params?.source) query.set('source', params.source);
+  const qs = query.toString();
+  return request(`${BASE}/news/sentiment/feed${qs ? `?${qs}` : ''}`);
+}
+
+export async function getNewsSentimentTrends(days = 30): Promise<SentimentTrend[]> {
+  return request(`${BASE}/news/sentiment/trends?days=${days}`);
+}
+
+export async function getNewsSentimentTopics(): Promise<TopicCluster[]> {
+  return request(`${BASE}/news/sentiment/topics`);
+}
+
+export async function refreshNewsSentiment(): Promise<{ ok: boolean; overview?: NewsSentimentOverview; error?: string }> {
+  return request(`${BASE}/news/sentiment/refresh`, { method: 'POST' });
+}
+
+export async function getNewsSentimentByStock(symbol: string): Promise<NewsSentimentItem[]> {
+  return request(`${BASE}/news/sentiment/stock/${symbol}`);
+}
+
+export async function searchNewsRealtime(keyword: string, limit?: number): Promise<{items: NewsSentimentItem[], total: number, keyword: string}> {
+  const query = new URLSearchParams();
+  query.set('keyword', keyword);
+  if (limit) query.set('limit', String(limit));
+  return request(`${BASE}/news/sentiment/search?${query.toString()}`);
+}
+
+// ── Monitor ──
+
+export async function getMonitorRules(): Promise<import('@/types').MonitorRule[]> {
+  return request(`${BASE}/monitor/rules`);
+}
+
+export async function createMonitorRule(data: Partial<import('@/types').MonitorRule>): Promise<import('@/types').MonitorRule> {
+  return request(`${BASE}/monitor/rules`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateMonitorRule(id: string, data: Partial<import('@/types').MonitorRule>): Promise<import('@/types').MonitorRule> {
+  return request(`${BASE}/monitor/rules/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteMonitorRule(id: string): Promise<{ok: boolean}> {
+  return request(`${BASE}/monitor/rules/${id}`, { method: 'DELETE' });
+}
+
+export async function getMonitorHits(ruleId?: string, limit?: number): Promise<import('@/types').MonitorHit[]> {
+  const query = new URLSearchParams();
+  if (ruleId) query.set('ruleId', ruleId);
+  if (limit) query.set('limit', String(limit));
+  const qs = query.toString();
+  return request(`${BASE}/monitor/hits${qs ? `?${qs}` : ''}`);
+}
+
+export async function testMonitorRule(id: string): Promise<{hits: import('@/types').MonitorHit[], total: number, emailSent: boolean}> {
+  return request(`${BASE}/monitor/rules/${id}/test`, { method: 'POST' });
+}
+
+export async function getMonitorStats(): Promise<import('@/types').MonitorStats> {
+  return request(`${BASE}/monitor/stats`);
+}
+
+export async function generateMonitorRule(description: string): Promise<{
+  ok: boolean; searchKeywords?: string[]; conditionTree?: import('@/types').ConditionNode; error?: string
+}> {
+  return request(`${BASE}/monitor/rules/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ description }),
   });
 }

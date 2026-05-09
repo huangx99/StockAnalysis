@@ -34,9 +34,24 @@ class Settings(BaseSettings):
     cache_ttl_search: int = 3600
     cache_max_size: int = 512
 
+    # Data source thread pools
+    ds_akshare_threads: int = 8
+    ds_yahoo_threads: int = 3
+    ds_pytdx_threads: int = 2
+    ds_circuit_breaker_recovery: float = 120.0
+    ds_default_timeout: float = 60.0
+
     # Server
     host: str = "127.0.0.1"
     port: int = 1335
+
+    # Auth
+    auth_secret_key: str = "stock-analysis-dev-secret-change-me"
+    auth_token_expire_minutes: int = 60 * 24 * 7
+    admin_username: str = "admin"
+    admin_email: str = "admin@stock.local"
+    admin_password: str = "Admin123456"
+    admin_usernames: list[str] = ["huangxuan"]
 
     model_config = {"env_prefix": "STOCK_", "env_file": ".env"}
 

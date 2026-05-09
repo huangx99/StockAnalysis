@@ -10,9 +10,12 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from routers import stocks, system, ai, screener, backtest
+from routers import stocks, system, ai, screener, backtest, auth, news
 from utils.logging_config import setup_logging
 from services.stock_service import prewarm_spot_cache
+from services.auth_store import ensure_seed_admin
+from services.data_sources import init_data_sources
+from services.news_sources import init_news_sources
 
 # 前端构建产物目录
 DIST_DIR = Path(__file__).parent.parent / "app" / "dist"
@@ -49,10 +52,35 @@ app.include_router(ai.router)
 app.include_router(system.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(auth.router)
+app.include_router(news.router)
+
+from routers import monitor
+app.include_router(monitor.router)
 
 
 @app.on_event("startup")
 async def startup():
+    ensure_seed_admin()
+
+    # Initialize data source abstraction layer
+    await init_data_sources(
+        akshare_threads=settings.ds_akshare_threads,
+        yahoo_threads=settings.ds_yahoo_threads,
+        pytdx_threads=settings.ds_pytdx_threads,
+        recovery_interval=settings.ds_circuit_breaker_recovery,
+    )
+
+    # Initialize pluggable news sources
+    init_news_sources()
+
+    # Background auto-refresh for news sentiment (every 30 min)
+    asyncio.create_task(_auto_refresh_news())
+
+    # Background monitor engine
+    from services.monitor_engine import monitor_loop
+    asyncio.create_task(monitor_loop())
+
     actual = getattr(ak, "__version__", "unknown")
     if actual != settings.akshare_version:
         logger.warning(
@@ -84,6 +112,41 @@ async def _prewarm():
         await prewarm_spot_cache()
     except Exception as e:
         logger.warning("Spot cache prewarm failed: %s", e)
+
+
+_shutdown = False
+
+
+async def _auto_refresh_news():
+    """Background task: refresh news sentiment every 30 minutes."""
+    global _shutdown
+    from services.news_sentiment_service import refresh_news_sentiment
+
+    # Wait 60s before first refresh to let providers initialize
+    await asyncio.sleep(60)
+
+    while not _shutdown:
+        try:
+            overview = await refresh_news_sentiment()
+            total = overview.get("totalCount", 0)
+            alerts = len(overview.get("alerts", []))
+            logger.info("Auto-refresh completed: %d items, %d alerts", total, alerts)
+        except Exception as e:
+            logger.warning("Auto-refresh failed: %s", e)
+
+        # Sleep 30 minutes
+        for _ in range(180):
+            if _shutdown:
+                break
+            await asyncio.sleep(10)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _shutdown
+    _shutdown = True
+    from services.monitor_engine import stop_monitor
+    stop_monitor()
 
 
 @app.exception_handler(Exception)

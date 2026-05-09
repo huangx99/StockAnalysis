@@ -612,3 +612,258 @@ export interface BacktestResponse {
   rolling: BacktestRollingPoint[];
   generatedAt: string;
 }
+
+export type UserRole = 'admin' | 'user';
+export type TemplateType = 'private' | 'system' | 'shared';
+
+export interface UserPublic {
+  id: string;
+  username: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  lastLoginAt: string;
+}
+
+export interface AuthTokenResponse {
+  accessToken: string;
+  tokenType: 'bearer';
+  expiresIn: number;
+  user: UserPublic;
+}
+
+export interface WatchlistItem {
+  id: string;
+  watchlistId: string;
+  userId: string;
+  stockCode: string;
+  stockName: string;
+  market: string;
+  note: string;
+  tags: string[];
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Watchlist {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  sortOrder: number;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+  items: WatchlistItem[];
+}
+
+export interface CalculationTemplate {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  description: string;
+  templateType: TemplateType;
+  category: string;
+  content: Record<string, unknown>;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Sector Analysis ──
+
+export interface SectorOverviewItem {
+  name: string;
+  changePercent: number;
+  mainNetInflow: number;
+  mainNetInflowPct: number;
+  superNetInflow: number;
+  bigNetInflow: number;
+  midNetInflow: number;
+  smallNetInflow: number;
+  limitUpCount: number;
+  limitUpStocks: { code: string; name: string }[];
+}
+
+export interface SectorOverviewResponse {
+  updatedAt: string;
+  items: SectorOverviewItem[];
+}
+
+export interface BidAskItem {
+  code: string;
+  name: string;
+  buy1Price: number;
+  buy1Volume: number;
+  buy2Price: number;
+  buy2Volume: number;
+  buy3Price: number;
+  buy3Volume: number;
+  buy4Price: number;
+  buy4Volume: number;
+  buy5Price: number;
+  buy5Volume: number;
+  sell1Price: number;
+  sell1Volume: number;
+  sell2Price: number;
+  sell2Volume: number;
+  sell3Price: number;
+  sell3Volume: number;
+  sell4Price: number;
+  sell4Volume: number;
+  sell5Price: number;
+  sell5Volume: number;
+  buyTotalAmount: number;
+  sellTotalAmount: number;
+  netAmount: number;
+}
+
+export interface SectorBidAskResponse {
+  board: string;
+  updatedAt: string;
+  total: number;
+  items: BidAskItem[];
+}
+
+// ── News Sentiment ──
+
+export interface AffectedStock {
+  symbol: string;
+  name: string;
+  matchType: 'direct' | 'keyword' | 'concept';
+  avgScore?: number;
+  count?: number;
+}
+
+export interface NewsSentimentItem {
+  id: string;
+  title: string;
+  content: string;
+  source: string;
+  publishTime: string;
+  url: string;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  sentimentScore: number;
+  importance: number;
+  topics: string[];
+  affectedStocks: AffectedStock[];
+  keywords: string[];
+}
+
+export interface SentimentTrend {
+  date: string;
+  score: number;
+  positiveCount: number;
+  negativeCount: number;
+  neutralCount: number;
+  totalCount: number;
+  topTopic: string;
+}
+
+export interface TopicCluster {
+  topic: string;
+  count: number;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  avgScore: number;
+  trend: 'up' | 'down' | 'flat';
+  recentTitles: string[];
+}
+
+export interface NewsAlert {
+  id: string;
+  title: string;
+  reason: string;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  importance: number;
+  publishTime: string;
+}
+
+export interface SectorSentiment {
+  sector: string;
+  count: number;
+  avgScore: number;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  topTopics: string[];
+}
+
+export interface NewsSentimentOverview {
+  updatedAt: string;
+  totalCount: number;
+  positiveCount: number;
+  negativeCount: number;
+  neutralCount: number;
+  overallScore: number;
+  marketPhase: string;
+  trends: SentimentTrend[];
+  hotTopics: TopicCluster[];
+  sectorSentiment?: SectorSentiment[];
+  alerts: NewsAlert[];
+  topAffectedStocks: AffectedStock[];
+}
+
+export interface PaginatedNewsFeed {
+  items: NewsSentimentItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+// ── Monitor ──
+
+export interface ConditionNode {
+  type: 'condition' | 'group';
+  // condition fields
+  field?: string;
+  operator?: string;
+  value?: string | number;
+  // group fields
+  logic?: 'AND' | 'OR';
+  conditions?: ConditionNode[];
+}
+
+export interface MonitorRule {
+  id: string;
+  userId: string;
+  name: string;
+  searchKeywords: string[];
+  conditionTree?: ConditionNode | null;
+  emailEnabled: boolean;
+  emailOnMatch: boolean;
+  intervalMinutes: number;
+  dndStart?: string;  // 勿扰开始时间 HH:MM
+  dndEnd?: string;    // 勿扰结束时间 HH:MM
+  enabled: boolean;
+  lastRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  // backward compat (old format)
+  keywords?: string[];
+}
+
+export interface MonitorHit {
+  ruleId: string;
+  userId: string;
+  newsId: string;
+  title: string;
+  content: string;
+  source: string;
+  url: string;
+  publishTime: string;
+  sentiment: 'positive' | 'neutral' | 'negative';
+  sentimentScore: number;
+  importance: number;
+  topics: string[];
+  matchedKeyword: string;
+  alerted: boolean;
+  seenAt: string;
+}
+
+export interface MonitorStats {
+  ruleCount: number;
+  enabledRuleCount: number;
+  totalHits: number;
+  todayHits: number;
+  alertedCount: number;
+}

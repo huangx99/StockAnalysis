@@ -32,6 +32,7 @@ from cache.cache_manager import (
     news_cache,
     spot_cache,
 )
+from services.data_sources import get_registry, DataCapability
 import math
 
 from models.stock import (
@@ -114,11 +115,14 @@ async def _get_spot_df():
         if _SPOT_CACHE_KEY in spot_cache:
             logger.debug("[spot] cache HIT (after lock)")
             return spot_cache[_SPOT_CACHE_KEY]
-        logger.info("[spot] cache MISS — fetching all stocks from AKShare...")
+        logger.info("[spot] cache MISS — fetching all stocks from data source...")
         t0 = time.time()
-        df = await asyncio.to_thread(fetch_all_stocks)
+        result = await get_registry().fetch(DataCapability.SPOT_QUOTE)
+        if not result.ok:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch spot data: {result.error}")
+        df = result.data
         elapsed = time.time() - t0
-        logger.info("[spot] fetched %d stocks in %.2fs", len(df), elapsed)
+        logger.info("[spot] fetched %d stocks in %.2fs (source: %s)", len(df), elapsed, result.source_name)
         spot_cache[_SPOT_CACHE_KEY] = df
         return df
 
@@ -217,10 +221,15 @@ async def get_stock_profile(symbol: str) -> StockProfile:
     industry = "未知"
     try:
         t1 = time.time()
-        info_df = await asyncio.to_thread(fetch_stock_info, symbol)
-        info_map = dict(zip(info_df["item"], info_df["value"]))
-        industry = str(info_map.get("行业", "未知"))
-        logger.info("[profile:%s] stock_info fetched in %.2fs, industry=%s", symbol, time.time() - t1, industry)
+        info_result = await get_registry().fetch(DataCapability.STOCK_INFO, symbol=symbol)
+        if info_result.ok:
+            info_df = info_result.data
+            info_map = dict(zip(info_df["item"], info_df["value"]))
+            industry = str(info_map.get("行业", "未知"))
+            logger.info("[profile:%s] stock_info fetched in %.2fs, industry=%s (source: %s)",
+                       symbol, time.time() - t1, industry, info_result.source_name)
+        else:
+            logger.warning("[profile:%s] stock_info failed: %s", symbol, info_result.error)
     except Exception as e:
         logger.warning("[profile:%s] stock_info failed: %s", symbol, e)
 
@@ -281,15 +290,18 @@ async def get_kline_data(symbol: str, period: str = "day", limit: int = 0) -> li
     period_map = {"day": "daily", "week": "weekly", "month": "monthly"}
     ak_period = period_map.get(period, "daily")
 
-    try:
-        df = await asyncio.to_thread(
-            fetch_stock_hist, symbol, ak_period, "", "", "qfq"
-        )
-    except (AKShareAdapterError, ColumnValidationError) as e:
-        raise HTTPException(status_code=502, detail=f"K-line data error: {e}")
-    except Exception as e:
-        logger.error("Unexpected error fetching kline for %s: %s", symbol, e)
-        raise HTTPException(status_code=502, detail=f"K-line data error: {e}")
+    result = await get_registry().fetch(
+        DataCapability.HISTORICAL_KLINE,
+        symbol=symbol,
+        period=ak_period,
+        start_date="",
+        end_date="",
+        adjust="qfq",
+    )
+    if not result.ok:
+        raise HTTPException(status_code=502, detail=f"K-line data error: {result.error}")
+    df = result.data
+    logger.info("[kline:%s:%s] fetched in %.2fs (source: %s)", symbol, period, time.time() - t0, result.source_name)
 
     closes = df["收盘"].tolist()
 
@@ -320,6 +332,69 @@ async def get_kline_data(symbol: str, period: str = "day", limit: int = 0) -> li
     kline_cache[cache_key] = result
     data_store.save_stock_data(symbol, f"kline_{period}", [item.model_dump() for item in result])
     return result
+
+
+async def get_minute_kline_data(symbol: str, period: str = "5min", limit: int = 0) -> list[KLineData]:
+    """获取分钟级K线数据，带缓存和增量更新。"""
+    cache_key = f"kline:{symbol}:{period}"
+    if cache_key in kline_cache:
+        full = kline_cache[cache_key]
+        result = full[-limit:] if limit > 0 else full
+        logger.info("[minute:%s:%s] cache HIT → %d records", symbol, period, len(result))
+        return result
+
+    # Try local data store
+    local = data_store.load_stock_data(symbol, f"kline_{period}")
+    if local is not None:
+        logger.info("[minute:%s:%s] local HIT → %d records", symbol, period, len(local))
+        full = [KLineData(**item) for item in local]
+        kline_cache[cache_key] = full
+        result = full[-limit:] if limit > 0 else full
+        return result
+
+    logger.info("[minute:%s:%s] cache MISS — fetching...", symbol, period)
+    t0 = time.time()
+
+    result = await get_registry().fetch(
+        DataCapability.MINUTE_KLINE,
+        symbol=symbol,
+        period=period,
+        count=800,
+    )
+    if not result.ok:
+        raise HTTPException(status_code=502, detail=f"Minute kline error: {result.error}")
+    df = result.data
+    logger.info("[minute:%s:%s] fetched in %.2fs (source: %s)", symbol, period, time.time() - t0, result.source_name)
+
+    closes = df["收盘"].tolist()
+
+    def ma(n: int, idx: int) -> float | None:
+        if idx < n - 1:
+            return None
+        return round(sum(closes[idx - n + 1 : idx + 1]) / n, 2)
+
+    kline_list = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        kline_list.append(
+            KLineData(
+                date=str(row["日期"]),
+                open=float(row["开盘"]),
+                high=float(row["最高"]),
+                low=float(row["最低"]),
+                close=float(row["收盘"]),
+                volume=float(row["成交量"]),
+                ma5=ma(5, i),
+                ma10=ma(10, i),
+                ma20=ma(20, i),
+                ma60=ma(60, i),
+            )
+        )
+
+    elapsed = time.time() - t0
+    logger.info("[minute:%s:%s] %d records in %.2fs", symbol, period, len(kline_list), elapsed)
+    kline_cache[cache_key] = kline_list
+    data_store.save_stock_data(symbol, f"kline_{period}", [item.model_dump() for item in kline_list])
+    return kline_list
 
 
 def _assemble_financials(
@@ -667,12 +742,18 @@ async def get_financial_periods(symbol: str, period: str = "quarter", limit: int
         filtered = [p for p in periods if period != "annual" or p.reportQuarter == "FY"]
         return filtered[:limit] if limit > 0 else filtered
 
-    income_df, balance_df, cashflow_df, indicator_df = await asyncio.gather(
-        asyncio.to_thread(fetch_financial_report_em, symbol, "income"),
-        asyncio.to_thread(fetch_financial_report_em, symbol, "balance"),
-        asyncio.to_thread(fetch_financial_report_em, symbol, "cashflow"),
-        asyncio.to_thread(fetch_financial_indicators, symbol, "2016"),
+    registry = get_registry()
+    income_result, balance_result, cashflow_result, indicator_result = await asyncio.gather(
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="income"),
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="balance"),
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="cashflow"),
+        registry.fetch(DataCapability.FINANCIAL_INDICATORS, symbol=symbol, start_year="2016"),
     )
+
+    income_df = income_result.data if income_result.ok else None
+    balance_df = balance_result.data if balance_result.ok else None
+    cashflow_df = cashflow_result.data if cashflow_result.ok else None
+    indicator_df = indicator_result.data if indicator_result.ok else None
 
     if income_df is None:
         logger.warning("[financial_periods:%s] EastMoney missing, fallback to legacy annual reports", symbol)
@@ -823,12 +904,17 @@ async def get_financials(symbol: str) -> list[FinancialStatement]:
     logger.info("[financials:%s] cache MISS — fetching 3 reports in parallel...", symbol)
     t0 = time.time()
 
-    # Fetch all three report types in parallel
-    profit_df, balance_df, cashflow_df = await asyncio.gather(
-        asyncio.to_thread(fetch_financial_report, symbol, "profit"),
-        asyncio.to_thread(fetch_financial_report, symbol, "balance"),
-        asyncio.to_thread(fetch_financial_report, symbol, "cashflow"),
+    # Fetch all three report types in parallel using registry (with fallback)
+    registry = get_registry()
+    profit_result, balance_result, cashflow_result = await asyncio.gather(
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="profit", use_em=False),
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="balance", use_em=False),
+        registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="cashflow", use_em=False),
     )
+
+    profit_df = profit_result.data if profit_result.ok else None
+    balance_df = balance_result.data if balance_result.ok else None
+    cashflow_df = cashflow_result.data if cashflow_result.ok else None
 
     fetch_elapsed = time.time() - t0
     logger.info("[financials:%s] parallel fetch done in %.2fs — profit=%s, balance=%s, cashflow=%s",
@@ -951,14 +1037,12 @@ async def get_news(symbol: str) -> list[StockDocument]:
     logger.info("[news:%s] cache MISS — fetching...", symbol)
     t0 = time.time()
 
-    try:
-        df = await asyncio.to_thread(fetch_stock_news, symbol)
-    except AKShareAdapterError as e:
-        logger.warning("[news:%s] not available: %s", symbol, e)
+    result = await get_registry().fetch(DataCapability.NEWS, symbol=symbol)
+    if not result.ok:
+        logger.warning("[news:%s] not available: %s", symbol, result.error)
         return _merge_all_docs([], symbol)
-    except Exception as e:
-        logger.warning("[news:%s] failed: %s", symbol, e)
-        return _merge_all_docs([], symbol)
+    df = result.data
+    logger.info("[news:%s] fetched in %.2fs (source: %s)", symbol, time.time() - t0, result.source_name)
 
     results = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -1018,11 +1102,11 @@ async def refresh_news(symbol: str) -> dict:
 
     # Fetch fresh news
     logger.info("[news:%s] refreshing — last stored time=%s", symbol, last_stored_time)
-    try:
-        df = await asyncio.to_thread(fetch_stock_news, symbol)
-    except Exception as e:
-        logger.warning("[news:%s] refresh fetch failed: %s", symbol, e)
+    result = await get_registry().fetch(DataCapability.NEWS, symbol=symbol)
+    if not result.ok:
+        logger.warning("[news:%s] refresh fetch failed: %s", symbol, result.error)
         return {"new_count": 0, "total": len(existing)}
+    df = result.data
 
     # Filter new items (publishTime > last_stored_time)
     existing_titles = {(item.get("title", ""), item.get("publishTime", "")[:10]) for item in existing}
@@ -1311,8 +1395,11 @@ async def get_dividends(symbol: str) -> list[DividendRecord]:
         financials_cache[cache_key] = result
         return result
 
-    df = await asyncio.to_thread(fetch_dividend_data, symbol)
-    if df is None or df.empty:
+    result = await get_registry().fetch(DataCapability.DIVIDEND, symbol=symbol)
+    if not result.ok or result.data is None:
+        return []
+    df = result.data
+    if df.empty:
         return []
 
     results = []

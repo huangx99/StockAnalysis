@@ -97,6 +97,32 @@ def fetch_stock_hist(
     return _validate_and_normalize_df(df, HIST_COLUMNS, "stock_zh_a_hist")
 
 
+MINUTE_KLINE_COLUMNS = {"时间": "日期", "开盘": "开盘", "收盘": "收盘", "最高": "最高", "最低": "最低", "成交量": "成交量", "成交额": "成交额"}
+
+
+def fetch_stock_hist_min(symbol: str, period: str = "5") -> pd.DataFrame:
+    """获取分钟K线历史数据（东方财富）。
+
+    Args:
+        symbol: 股票代码，如 "600519"
+        period: 分钟周期，"1", "5", "15", "30", "60"
+
+    Returns:
+        标准化的 DataFrame
+    """
+    logger.info("[adapter] calling stock_zh_a_hist_min_em(%s, %s)...", symbol, period)
+    t0 = time.time()
+    df = ak.stock_zh_a_hist_min_em(symbol=symbol, period=period)
+    logger.info("[adapter] stock_zh_a_hist_min_em(%s) returned %d rows in %.2fs", symbol, len(df), time.time() - t0)
+    # 列名标准化：时间 -> 日期
+    df = df.rename(columns={"时间": "日期"})
+    required = ["日期", "开盘", "收盘", "最高", "最低", "成交量", "成交额"]
+    for col in required:
+        if col not in df.columns:
+            raise ColumnValidationError(f"stock_zh_a_hist_min_em missing column: {col}")
+    return df[required]
+
+
 def fetch_stock_info(symbol: str) -> pd.DataFrame:
     logger.info("[adapter] calling stock_individual_info_em(%s)...", symbol)
     t0 = time.time()
@@ -395,4 +421,74 @@ def fetch_stock_reports(symbol: str) -> pd.DataFrame | None:
         raise
     except Exception as e:
         logger.warning("stock_research_report_em(%s) failed: %s", symbol, e)
+        return None
+
+
+def fetch_sector_fund_flow_rank(indicator: str = "今日") -> pd.DataFrame | None:
+    """Fetch sector fund flow ranking from EastMoney."""
+    try:
+        logger.info("[adapter] calling stock_sector_fund_flow_rank(%s)...", indicator)
+        t0 = time.time()
+        df = ak.stock_sector_fund_flow_rank(indicator=indicator, sector_type="行业资金流")
+        if df is None or df.empty:
+            logger.warning("stock_sector_fund_flow_rank returned empty")
+            return None
+        logger.info("[adapter] stock_sector_fund_flow_rank returned %d rows in %.2fs", len(df), time.time() - t0)
+        return df
+    except Exception as e:
+        logger.warning("stock_sector_fund_flow_rank failed: %s", e)
+        return None
+
+
+def fetch_board_cons(board_name: str) -> pd.DataFrame | None:
+    """Fetch constituent stocks of an industry board."""
+    try:
+        logger.info("[adapter] calling stock_board_industry_cons_em(%s)...", board_name)
+        t0 = time.time()
+        df = ak.stock_board_industry_cons_em(symbol=board_name)
+        if df is None or df.empty:
+            logger.warning("stock_board_industry_cons_em(%s) returned empty", board_name)
+            return None
+        logger.info("[adapter] stock_board_industry_cons_em(%s) returned %d rows in %.2fs",
+                    board_name, len(df), time.time() - t0)
+        return df
+    except Exception as e:
+        logger.warning("stock_board_industry_cons_em(%s) failed: %s", board_name, e)
+        return None
+
+
+def fetch_bid_ask(symbol: str) -> dict | None:
+    """Fetch bid/ask order book for a single stock (5 levels)."""
+    try:
+        logger.info("[adapter] calling stock_bid_ask_em(%s)...", symbol)
+        t0 = time.time()
+        df = ak.stock_bid_ask_em(symbol=symbol)
+        if df is None or df.empty:
+            logger.warning("stock_bid_ask_em(%s) returned empty", symbol)
+            return None
+        result = {}
+        for _, row in df.iterrows():
+            item = str(row.get("item", ""))
+            value = row.get("value", 0)
+            result[item] = value
+        logger.info("[adapter] stock_bid_ask_em(%s) returned in %.2fs", symbol, time.time() - t0)
+        return result
+    except Exception as e:
+        logger.warning("stock_bid_ask_em(%s) failed: %s", symbol, e)
+        return None
+
+
+def fetch_limit_up_pool(date: str) -> pd.DataFrame | None:
+    """Fetch limit-up stock pool for a given date (YYYYMMDD)."""
+    try:
+        logger.info("[adapter] calling stock_zt_pool_em(%s)...", date)
+        t0 = time.time()
+        df = ak.stock_zt_pool_em(date=date)
+        if df is None or df.empty:
+            logger.warning("stock_zt_pool_em(%s) returned empty", date)
+            return None
+        logger.info("[adapter] stock_zt_pool_em(%s) returned %d rows in %.2fs", date, len(df), time.time() - t0)
+        return df
+    except Exception as e:
+        logger.warning("stock_zt_pool_em(%s) failed: %s", date, e)
         return None

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { AlertTriangle, Search, Sparkles, X, Network } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -19,7 +19,11 @@ import {
   getStockStats,
   getDividends,
   getSavedAIAnalysis,
+  refreshStockData,
   streamAIAnalysis,
+  checkWatchlistSymbol,
+  addWatchlistItem,
+  removeWatchlistSymbol,
 } from '@/api/real/stockApi'
 
 /* ── Skeleton components ─────────────────────────────── */
@@ -90,6 +94,8 @@ function AISkeleton() {
 /* ── Main page component ─────────────────────────────── */
 export default function StockDashboard() {
   const { symbol } = useParams<{ symbol: string }>()
+  const fullLoadSeqRef = useRef(0)
+  const klineLoadSeqRef = useRef(0)
 
   const [profile, setProfile] = useState<StockProfile | null>(null)
   const [klineData, setKlineData] = useState<KLineData[]>([])
@@ -112,16 +118,29 @@ export default function StockDashboard() {
 
   const [error, setError] = useState<string | null>(null)
   const [isFavorite, setIsFavorite] = useState(false)
-  const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day')
+  const [favoriteLoading, setFavoriteLoading] = useState(false)
+  const [period, setPeriod] = useState<'day' | 'week' | 'month' | '1min' | '5min' | '15min' | '30min' | '60min'>('day')
   const [klineLimit, setKlineLimit] = useState(250)
   const [aiStreaming, setAiStreaming] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [aiError, setAiError] = useState('')
+  const [refreshingData, setRefreshingData] = useState(false)
+  const [refreshMessage, setRefreshMessage] = useState('')
 
   const isValidSymbol = symbol && /^\d{6}$/.test(symbol)
 
-  const fetchAll = useCallback(async () => {
+  // 分钟K线只显示当天数据
+  const displayKlineData = useMemo(() => {
+    if (!period.endsWith('min')) return klineData
+    const today = new Date().toISOString().split('T')[0]
+    return klineData.filter(d => d.date.startsWith(today))
+  }, [klineData, period])
+
+  const fetchAll = useCallback(async (forceRefresh = false) => {
     if (!isValidSymbol) return
+    const fullLoadSeq = ++fullLoadSeqRef.current
+    const klineLoadSeq = ++klineLoadSeqRef.current
+    const refreshToken = forceRefresh ? Date.now() : undefined
     setError(null)
     setLoading({ profile: true, kline: true, financials: true, news: true, stats: true, ai: false })
     setAiAnalysis(null)
@@ -132,8 +151,8 @@ export default function StockDashboard() {
 
     // Fetch non-AI data and saved AI cache in parallel. Saved AI does not call the model.
     const [p, k, f, fp, fs, n, s, d, ai] = await Promise.allSettled([
-      getStockProfile(symbol!),
-      getKLineData(symbol!, period, klineLimit),
+      getStockProfile(symbol!, refreshToken),
+      getKLineData(symbol!, period, klineLimit, refreshToken),
       getFinancials(symbol!),
       getFinancialPeriods(symbol!, 'quarter', 0),
       getFinancialSummary(symbol!),
@@ -143,8 +162,10 @@ export default function StockDashboard() {
       getSavedAIAnalysis(symbol!),
     ])
 
+    if (fullLoadSeqRef.current !== fullLoadSeq) return
+
     if (p.status === 'fulfilled') setProfile(p.value)
-    if (k.status === 'fulfilled') setKlineData(k.value)
+    if (k.status === 'fulfilled' && klineLoadSeqRef.current === klineLoadSeq) setKlineData(k.value)
     if (f.status === 'fulfilled') setFinancials(f.value)
     if (fp.status === 'fulfilled') setFinancialPeriods(fp.value)
     if (fs.status === 'fulfilled') setFinancialSummary(fs.value)
@@ -158,24 +179,86 @@ export default function StockDashboard() {
     }
 
     setLoading((l) => ({ ...l, profile: false, kline: false, financials: false, news: false, stats: false }))
-  }, [symbol, isValidSymbol])
+  }, [symbol, isValidSymbol, klineLimit])
 
   const refreshKline = useCallback(async () => {
     if (!isValidSymbol) return
+    const klineLoadSeq = ++klineLoadSeqRef.current
     setLoading((l) => ({ ...l, kline: true }))
     try {
       const k = await getKLineData(symbol!, period, klineLimit)
-      setKlineData(k)
+      if (klineLoadSeqRef.current === klineLoadSeq) setKlineData(k)
     } catch {
       /* ignore */
     } finally {
-      setLoading((l) => ({ ...l, kline: false }))
+      if (klineLoadSeqRef.current === klineLoadSeq) setLoading((l) => ({ ...l, kline: false }))
     }
   }, [symbol, period, isValidSymbol, klineLimit])
+
+  // 追加分钟K线增量数据（不显示loading）
+  const appendMinuteKline = useCallback(async () => {
+    if (!isValidSymbol || !period.endsWith('min')) return
+    try {
+      const all = await getKLineData(symbol!, period, 0)
+      setKlineData(all)
+    } catch { /* ignore */ }
+  }, [symbol, period, isValidSymbol])
 
   const handleLoadAllKline = useCallback(() => {
     setKlineLimit(0)
   }, [])
+
+  // 刷新基础信息（价格、涨跌幅等）
+  const refreshProfile = useCallback(async () => {
+    if (!isValidSymbol) return
+    try {
+      const p = await getStockProfile(symbol!)
+      setProfile(p)
+    } catch { /* ignore */ }
+  }, [symbol, isValidSymbol])
+
+  const handleRefreshData = useCallback(async () => {
+    if (!isValidSymbol || refreshingData) return
+    setRefreshingData(true)
+    setRefreshMessage('正在增量更新...')
+    try {
+      const res = await refreshStockData(symbol!)
+      if (res.status !== 'ok') {
+        setRefreshMessage(res.message || '更新未完全成功')
+        return
+      }
+      setRefreshMessage('刷新完成，正在更新页面...')
+      await fetchAll(true)
+      setRefreshMessage('已更新到最新')
+    } catch (e: any) {
+      setRefreshMessage(e?.message || '更新失败')
+    } finally {
+      setRefreshingData(false)
+      window.setTimeout(() => setRefreshMessage(''), 3000)
+    }
+  }, [symbol, isValidSymbol, refreshingData, fetchAll])
+
+  const handleToggleFavorite = useCallback(async () => {
+    if (!profile || favoriteLoading) return
+    setFavoriteLoading(true)
+    try {
+      if (isFavorite) {
+        await removeWatchlistSymbol(profile.symbol)
+        setIsFavorite(false)
+      } else {
+        await addWatchlistItem({
+          stockCode: profile.symbol,
+          stockName: profile.name,
+          market: profile.market,
+        })
+        setIsFavorite(true)
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setFavoriteLoading(false)
+    }
+  }, [profile, isFavorite, favoriteLoading])
 
   const handleRegenerateAI = useCallback(() => {
     if (!isValidSymbol) return
@@ -205,8 +288,32 @@ export default function StockDashboard() {
   }, [fetchAll])
 
   useEffect(() => {
+    if (!isValidSymbol) return
+    checkWatchlistSymbol(symbol!)
+      .then(res => setIsFavorite(res.isFavorite))
+      .catch(() => setIsFavorite(false))
+  }, [symbol, isValidSymbol])
+
+  useEffect(() => {
     refreshKline()
   }, [period, refreshKline])
+
+  // 分钟K线自动追加（每15秒），同时更新基础信息
+  useEffect(() => {
+    if (!period.endsWith('min')) return
+    const timer = setInterval(() => {
+      appendMinuteKline()
+      // 交易时间内同时刷新基础信息
+      const now = new Date()
+      const day = now.getDay()
+      const minutes = now.getHours() * 60 + now.getMinutes()
+      const duringTrading = day >= 1 && day <= 5 && minutes >= 9 * 60 + 30 && minutes <= 15 * 60
+      if (duringTrading) {
+        refreshProfile()
+      }
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [period, appendMinuteKline, refreshProfile])
 
   if (!isValidSymbol) {
     return (
@@ -252,9 +359,11 @@ export default function StockDashboard() {
       ) : profile ? (
         <StockHeader
           profile={profile}
-          onRefresh={fetchAll}
+          onRefresh={handleRefreshData}
+          isRefreshing={refreshingData}
+          refreshMessage={refreshMessage}
           isFavorite={isFavorite}
-          onToggleFavorite={() => setIsFavorite((f) => !f)}
+          onToggleFavorite={handleToggleFavorite}
         />
       ) : null}
 
@@ -288,7 +397,7 @@ export default function StockDashboard() {
           <ChartSkeleton />
         ) : (
           <StockKLineChart
-            data={klineData}
+            data={displayKlineData}
             loading={loading.kline}
             period={period}
             onPeriodChange={setPeriod}

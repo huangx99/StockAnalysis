@@ -43,6 +43,7 @@ const DATA_TYPE_LABELS: Record<string, string> = {
 }
 const PAGE_SIZE = 50
 const LOCAL_TABLE_COLS = Object.keys(DATA_TYPE_LABELS).length + 5
+const UPDATE_TO_LATEST_DATA_TYPES = ['profile', 'kline_day']
 
 function formatMissingDataTypes(types: string[] = []): string {
   return types.map(type => DATA_TYPE_LABELS[type] || type).join('、')
@@ -56,6 +57,8 @@ interface QueueItem {
   status: 'pending' | 'downloading' | 'done' | 'error'
   message?: string
   stats?: Record<string, number>
+  dataTypes?: string[]
+  actionLabel?: string
 }
 
 const QUEUE_KEY = 'data_download_queue'
@@ -96,9 +99,11 @@ export default function DataManager() {
   const [showIndustry, setShowIndustry] = useState(false)
   const [industries, setIndustries] = useState<{ name: string; code: string; count: number }[]>([])
   const [industriesLoading, setIndustriesLoading] = useState(false)
+  const [industriesError, setIndustriesError] = useState('')
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null)
   const [industryStocks, setIndustryStocks] = useState<{ code: string; name: string }[]>([])
   const [industryStocksLoading, setIndustryStocksLoading] = useState(false)
+  const [industryStocksError, setIndustryStocksError] = useState('')
 
   // Local data state
   const [stocks, setStocks] = useState<StockDataSummary[]>([])
@@ -221,7 +226,7 @@ export default function DataManager() {
       saveQueue(current)
 
       try {
-        const res = await downloadStockData(current[i].symbol)
+        const res = await downloadStockData(current[i].symbol, current[i].dataTypes)
         if (res.status === 'ok') {
           const stats = (res as any).stats || {}
           const labelMap: Record<string, string> = {
@@ -232,7 +237,8 @@ export default function DataManager() {
           const parts = Object.entries(stats as Record<string, number>)
             .filter(([, v]) => v > 0)
             .map(([k, v]) => `${labelMap[k] || k}:${v}`)
-          current[i] = { ...current[i], status: 'done', message: parts.join(', ') || '完成', stats }
+          const doneMessage = parts.join(', ') || (current[i].dataTypes?.length ? '已是最新' : '完成')
+          current[i] = { ...current[i], status: 'done', message: doneMessage, stats }
         } else {
           current[i] = { ...current[i], status: 'error', message: res.message || '失败' }
         }
@@ -241,10 +247,11 @@ export default function DataManager() {
       }
       setQueue([...current])
       saveQueue(current)
+      await fetchStocks(page, localQuery, missingOnly)
     }
 
     processingRef.current = false
-    fetchStocks(page, localQuery, missingOnly)
+    await fetchStocks(page, localQuery, missingOnly)
   }, [page, localQuery, missingOnly, fetchStocks])
 
   // Auto-process queue when items are added
@@ -252,15 +259,36 @@ export default function DataManager() {
     if (queue.some(q => q.status === 'pending')) {
       processQueue(queue)
     }
-  }, [queue.length])
+  }, [queue, processQueue])
 
-  const addToQueue = (symbol: string, name: string) => {
+  const addToQueue = (symbol: string, name: string, dataTypes?: string[], actionLabel?: string) => {
     if (queue.some(q => q.symbol === symbol && (q.status === 'pending' || q.status === 'downloading'))) return
     // Remove old completed/error entries for same symbol
     const filtered = queue.filter(q => q.symbol !== symbol)
-    const newQueue = [...filtered, { id: `${symbol}-${Date.now()}`, symbol, name, status: 'pending' as const }]
+    const newQueue = [...filtered, { id: `${symbol}-${Date.now()}`, symbol, name, status: 'pending' as const, dataTypes, actionLabel }]
     setQueue(newQueue)
     saveQueue(newQueue)
+  }
+
+  const addManyToQueue = (items: { code: string; name: string }[], dataTypes?: string[], actionLabel?: string) => {
+    const activeSymbols = new Set(queue.filter(q => q.status === 'pending' || q.status === 'downloading').map(q => q.symbol))
+    const itemSymbols = new Set(items.map(item => item.code))
+    const keptQueue = queue.filter(q => !itemSymbols.has(q.symbol) || activeSymbols.has(q.symbol))
+    const timestamp = Date.now()
+    const newItems = items
+      .filter(item => !activeSymbols.has(item.code))
+      .map((item, index) => ({
+        id: `${item.code}-${timestamp}-${index}`,
+        symbol: item.code,
+        name: item.name,
+        status: 'pending' as const,
+        dataTypes,
+        actionLabel,
+      }))
+    const newQueue = [...keptQueue, ...newItems]
+    setQueue(newQueue)
+    saveQueue(newQueue)
+    return newItems.length
   }
 
   const clearFinished = () => {
@@ -287,29 +315,53 @@ export default function DataManager() {
   }
 
   // Industry handlers
+  const openIndustryModal = () => {
+    setShowIndustry(true)
+    setSelectedIndustry(null)
+    setIndustryStocks([])
+    setIndustryStocksError('')
+    loadIndustries()
+  }
+
+  const closeIndustryModal = () => {
+    setShowIndustry(false)
+    setSelectedIndustry(null)
+    setIndustryStocks([])
+    setIndustriesError('')
+    setIndustryStocksError('')
+  }
+
   const loadIndustries = async () => {
     setIndustriesLoading(true)
+    setIndustriesError('')
     try {
       const res = await getIndustries()
       setIndustries(res.items || [])
-    } catch {}
+    } catch (e: any) {
+      setIndustries([])
+      setIndustriesError(e?.message || '板块列表加载失败')
+    }
     setIndustriesLoading(false)
   }
 
   const loadIndustryStocks = async (name: string) => {
     setSelectedIndustry(name)
+    setIndustryStocks([])
+    setIndustryStocksError('')
     setIndustryStocksLoading(true)
     try {
       const res = await getIndustryStocks(name)
       setIndustryStocks(res.items || [])
-    } catch {}
+    } catch (e: any) {
+      setIndustryStocks([])
+      setIndustryStocksError(e?.message || '板块股票加载失败')
+    }
     setIndustryStocksLoading(false)
   }
 
   const downloadIndustryStocks = () => {
-    for (const s of industryStocks) {
-      addToQueue(s.code, s.name)
-    }
+    const addedCount = addManyToQueue(industryStocks, UPDATE_TO_LATEST_DATA_TYPES, '更新至最新')
+    if (addedCount === 0) alert('该板块股票已在下载队列中')
     setShowIndustry(false)
     setSelectedIndustry(null)
     setIndustryStocks([])
@@ -403,8 +455,8 @@ export default function DataManager() {
         <>
       {/* Action Buttons Row */}
       <div className="flex flex-wrap gap-3">
-        <Button variant="outline" onClick={() => { setShowIndustry(true); loadIndustries() }}>
-          <Building2 className="w-4 h-4 mr-1.5" /> 按板块下载
+        <Button variant="outline" onClick={openIndustryModal}>
+          <Building2 className="w-4 h-4 mr-1.5" /> 按板块更新至最新
         </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
@@ -510,6 +562,7 @@ export default function DataManager() {
               <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                 下载队列
                 {activeQueue.length > 0 && <span className="ml-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>({activeQueue.length} 进行中)</span>}
+                {queue.some(q => q.actionLabel === '更新至最新') && <span className="ml-1.5 text-xs" style={{ color: 'var(--accent-primary)' }}>更新至最新</span>}
               </span>
             </div>
             <Button variant="ghost" size="sm" onClick={clearFinished}>
@@ -551,6 +604,7 @@ export default function DataManager() {
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{item.symbol}</span>
                     <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{item.name}</span>
+                    {item.actionLabel && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--accent-primary)', backgroundColor: 'var(--accent-primary)1F' }}>{item.actionLabel}</span>}
                   </div>
                   <span className="text-xs" style={{ color: item.status === 'done' ? 'var(--text-muted)' : 'var(--down-green)' }}>
                     {item.message}
@@ -577,6 +631,7 @@ export default function DataManager() {
                   {activeQueue[0].symbol}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{activeQueue[0].name}</span>
+                {activeQueue[0].actionLabel && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--accent-primary)', backgroundColor: 'var(--accent-primary)1F' }}>{activeQueue[0].actionLabel}</span>}
                 {singleProgress?.status === 'running' && singleProgress.dataTypes && (
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     {singleProgress.completedTypes?.length ?? 0}/{singleProgress.dataTypes.length}
@@ -807,82 +862,119 @@ export default function DataManager() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
             style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
-            onClick={() => { setShowIndustry(false); setSelectedIndustry(null); setIndustryStocks([]) }}
+            onClick={closeIndustryModal}
           >
             <motion.div
               initial={{ scale: 0.95, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 20 }}
-              className="w-full max-w-2xl max-h-[80vh] rounded-xl border border-border-subtle flex flex-col overflow-hidden"
+              className="w-full max-w-4xl max-h-[82vh] rounded-xl border border-border-subtle flex flex-col overflow-hidden"
               style={{ backgroundColor: 'var(--bg-surface)' }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-6 py-4 border-b border-border-subtle flex items-center justify-between">
                 <h2 className="font-h3" style={{ color: 'var(--text-primary)' }}>
-                  {selectedIndustry ? `板块: ${selectedIndustry}` : '按板块下载'}
+                  {selectedIndustry ? `板块：${selectedIndustry}` : '按板块更新至最新'}
                 </h2>
-                <button onClick={() => { setShowIndustry(false); setSelectedIndustry(null); setIndustryStocks([]) }} className="p-1.5 rounded hover:bg-bg-elevated">
+                <button onClick={closeIndustryModal} className="p-1.5 rounded hover:bg-bg-elevated">
                   <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4">
-                {!selectedIndustry ? (
-                  // Industry list
-                  industriesLoading ? (
-                    <div className="flex items-center justify-center py-12" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载板块列表...
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="rounded-lg border border-border-subtle px-4 py-3 text-sm" style={{ backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                  先选择板块，系统会展示该板块股票；点击“更新至最新”后，只更新基本信息和日K线；如果缺了多天，会从本地最后日期增量补到最新。
+                </div>
+
+                {!selectedIndustry && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>1. 选择板块</div>
+                      <Button size="sm" variant="outline" onClick={loadIndustries} disabled={industriesLoading}>
+                        <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${industriesLoading ? 'animate-spin' : ''}`} /> 刷新板块
+                      </Button>
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {industries.map((ind) => (
-                        <button
-                          key={ind.code}
-                          onClick={() => loadIndustryStocks(ind.name)}
-                          className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border-subtle hover:border-accent-primary transition-colors text-left"
-                          style={{ backgroundColor: 'var(--bg-elevated)' }}
-                        >
-                          <div>
-                            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{ind.name}</div>
-                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{ind.count} 只</div>
-                          </div>
-                          <ChevronRight className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
-                        </button>
-                      ))}
-                    </div>
-                  )
-                ) : (
-                  // Stock list for selected industry
-                  industryStocksLoading ? (
-                    <div className="flex items-center justify-center py-12" style={{ color: 'var(--text-muted)' }}>
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载股票列表...
-                    </div>
-                  ) : (
-                    <>
-                      <div className="mb-3 flex items-center justify-between">
-                        <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{industryStocks.length} 只股票</span>
-                        <Button size="sm" onClick={downloadIndustryStocks}>
-                          <Download className="w-3.5 h-3.5 mr-1.5" /> 全部加入下载
+                    {industriesLoading ? (
+                      <div className="flex items-center justify-center py-12" style={{ color: 'var(--text-muted)' }}>
+                        <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载板块列表...
+                      </div>
+                    ) : industriesError ? (
+                      <div className="rounded-lg border border-border-subtle p-4 text-sm" style={{ color: 'var(--down-green)', backgroundColor: 'var(--bg-elevated)' }}>
+                        {industriesError}
+                      </div>
+                    ) : industries.length === 0 ? (
+                      <div className="rounded-lg border border-border-subtle p-4 text-sm" style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-elevated)' }}>
+                        暂无板块列表。请先下载一些个股基本信息，或在行业对比页重建本地行业快照。
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {industries.map((ind) => (
+                          <button
+                            key={ind.name || ind.code}
+                            onClick={() => loadIndustryStocks(ind.name)}
+                            className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border-subtle hover:border-accent-primary transition-colors text-left"
+                            style={{ backgroundColor: 'var(--bg-elevated)' }}
+                          >
+                            <div>
+                              <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{ind.name}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{ind.count} 只</div>
+                            </div>
+                            <ChevronRight className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {selectedIndustry && (
+                  <div className="space-y-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>2. 确认股票并更新</div>
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>板块：{selectedIndustry} · 将增量更新基本信息 + 日K线</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" onClick={() => { setSelectedIndustry(null); setIndustryStocks([]); setIndustryStocksError('') }}>
+                          返回板块列表
+                        </Button>
+                        <Button size="sm" onClick={downloadIndustryStocks} disabled={industryStocksLoading || industryStocks.length === 0}>
+                          <Download className="w-3.5 h-3.5 mr-1.5" /> 更新至最新
                         </Button>
                       </div>
+                    </div>
+
+                    {industryStocksLoading ? (
+                      <div className="flex items-center justify-center py-12" style={{ color: 'var(--text-muted)' }}>
+                        <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载股票列表...
+                      </div>
+                    ) : industryStocksError ? (
+                      <div className="rounded-lg border border-border-subtle p-4 text-sm" style={{ color: 'var(--down-green)', backgroundColor: 'var(--bg-elevated)' }}>
+                        {industryStocksError}
+                      </div>
+                    ) : industryStocks.length === 0 ? (
+                      <div className="rounded-lg border border-border-subtle p-4 text-sm" style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-elevated)' }}>
+                        该板块暂未找到股票。可返回选择其他板块，或确认本地基本信息/AKShare 板块数据是否可用。
+                      </div>
+                    ) : (
                       <div className="border border-border-subtle rounded-lg overflow-hidden max-h-96 overflow-y-auto">
                         {industryStocks.map((s) => {
                           const inQueue = queue.some(q => q.symbol === s.code && (q.status === 'pending' || q.status === 'downloading'))
                           return (
-                            <div key={s.code} className="flex items-center justify-between px-4 py-2 border-b border-border-subtle last:border-b-0">
-                              <div className="flex items-center gap-3">
-                                <span className="font-mono text-xs" style={{ color: 'var(--accent-primary)' }}>{s.code}</span>
-                                <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{s.name}</span>
+                            <div key={s.code} className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border-subtle last:border-b-0">
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span className="font-mono text-xs shrink-0" style={{ color: 'var(--accent-primary)' }}>{s.code}</span>
+                                <span className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{s.name}</span>
                               </div>
-                              <Button size="sm" variant="outline" disabled={inQueue} onClick={() => addToQueue(s.code, s.name)}>
-                                {inQueue ? <CheckCircle className="w-3.5 h-3.5" /> : <Download className="w-3.5 h-3.5" />}
+                              <Button size="sm" variant="outline" disabled={inQueue} onClick={() => addToQueue(s.code, s.name, UPDATE_TO_LATEST_DATA_TYPES, '更新至最新')}>
+                                {inQueue ? <CheckCircle className="w-3.5 h-3.5" /> : <><Download className="w-3.5 h-3.5 mr-1" /> 更新</>}
                               </Button>
                             </div>
                           )
                         })}
                       </div>
-                    </>
-                  )
+                    )}
+                  </div>
                 )}
               </div>
             </motion.div>

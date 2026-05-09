@@ -1,23 +1,15 @@
 import asyncio
 import json
 import logging
+import time
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 
-from adapters.akshare_adapter import (
-    fetch_all_stocks,
-    fetch_stock_hist,
-    fetch_stock_info,
-    fetch_stock_news,
-    fetch_financial_report,
-    fetch_financial_report_em,
-    fetch_financial_indicators,
-    fetch_dividend_data,
-    fetch_stock_notices,
-    fetch_stock_reports,
-)
 from services import data_store
 from services.download_executor import MAX_DOWNLOAD_THREADS, STOCK_DOWNLOAD_CONCURRENCY, install_default_executor
+from services.data_sources import get_registry, DataCapability
+from cache.cache_manager import financials_cache, kline_cache, news_cache, profile_cache
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +31,54 @@ DATA_TYPE_LABELS = {
 PRIMARY_DATA_TYPES = tuple(DATA_TYPE_LABELS.keys())
 
 _single_download_state: dict | None = None
+_symbol_download_locks: dict[str, asyncio.Lock] = {}
+_symbol_download_locks_guard = asyncio.Lock()
+_single_download_semaphore = asyncio.Semaphore(max(1, STOCK_DOWNLOAD_CONCURRENCY))
+
+
+async def _get_symbol_download_lock(symbol: str) -> asyncio.Lock:
+    async with _symbol_download_locks_guard:
+        lock = _symbol_download_locks.get(symbol)
+        if lock is None:
+            lock = asyncio.Lock()
+            _symbol_download_locks[symbol] = lock
+        return lock
+
+
+async def _run_symbol_download(symbol: str, download):
+    lock = await _get_symbol_download_lock(symbol)
+    async with lock:
+        async with _single_download_semaphore:
+            return await download()
+
+
+async def _try_run_symbol_download(symbol: str, download):
+    lock = await _get_symbol_download_lock(symbol)
+    if lock.locked():
+        return None
+    async with lock:
+        async with _single_download_semaphore:
+            return await download()
 
 
 def get_missing_data_types(symbol: str) -> list[str]:
     return [data_type for data_type in PRIMARY_DATA_TYPES if not data_store.has_stock_data(symbol, data_type)]
+
+
+def _invalidate_kline_cache(symbol: str, period: str) -> None:
+    kline_cache.pop(f"kline:{symbol}:{period}", None)
+
+
+def _invalidate_stock_caches(symbol: str) -> None:
+    profile_cache.pop(f"profile:{symbol}", None)
+    for period in ("day", "week", "month"):
+        _invalidate_kline_cache(symbol, period)
+    for key in list(financials_cache.keys()):
+        if str(key).startswith(f"financials:{symbol}"):
+            financials_cache.pop(key, None)
+    for key in list(news_cache.keys()):
+        if str(key).startswith(f"news:{symbol}"):
+            news_cache.pop(key, None)
 
 
 def _append_log(logs: list[str], msg: str) -> None:
@@ -96,6 +132,57 @@ def _date_to_yyyymmdd(value: str | None, default: str = "20200101") -> str:
     if len(date_text) == 10:
         return date_text.replace("-", "")
     return default
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+@lru_cache(maxsize=1)
+def _trade_dates_until_today() -> set[str] | None:
+    try:
+        import akshare as ak
+
+        df = ak.tool_trade_date_hist_sina()
+        if df is None or df.empty:
+            return None
+        column = "trade_date" if "trade_date" in df.columns else df.columns[0]
+        today = datetime.now().strftime("%Y-%m-%d")
+        dates = set()
+        for value in df[column].tolist():
+            date_text = _date_only(value)
+            if date_text and date_text <= today:
+                dates.add(date_text)
+        return dates or None
+    except Exception as e:
+        logger.warning("[download] trade calendar failed: %s", e)
+        return None
+
+
+def _is_trade_date(date_text: str) -> bool:
+    trade_dates = _trade_dates_until_today()
+    if trade_dates is not None:
+        return date_text in trade_dates
+    try:
+        return datetime.strptime(date_text, "%Y-%m-%d").weekday() < 5
+    except ValueError:
+        return False
+
+
+def _with_moving_averages(rows: list[dict]) -> list[dict]:
+    rows = sorted(rows, key=lambda row: row.get("date") or "")
+    closes = [_safe_float(row.get("close")) for row in rows]
+    for idx, row in enumerate(rows):
+        for window in (5, 10, 20, 60):
+            key = f"ma{window}"
+            if idx < window - 1:
+                row[key] = None
+            else:
+                row[key] = round(sum(closes[idx - window + 1: idx + 1]) / window, 2)
+    return rows
 
 
 def _max_record_date(records: list[dict], date_getter) -> str:
@@ -171,13 +258,14 @@ def _dividend_record_date(record: dict) -> str:
 
 async def _fetch_and_save_profile(symbol: str, name: str, spot_df=None) -> bool:
     try:
-        existing = data_store.load_stock_data(symbol, "profile")
-        today = datetime.now().strftime("%Y-%m-%d")
-        if isinstance(existing, dict) and _date_only(existing.get("updateTime")) >= today:
-            return 0
+        registry = get_registry()
 
         if spot_df is None:
-            spot_df = await asyncio.to_thread(fetch_all_stocks)
+            spot_result = await registry.fetch(DataCapability.SPOT_QUOTE)
+            if not spot_result.ok:
+                logger.warning("[download] %s spot fetch failed: %s", symbol, spot_result.error)
+                return False
+            spot_df = spot_result.data
 
         row = spot_df[spot_df["代码"] == symbol]
         if row.empty:
@@ -187,9 +275,11 @@ async def _fetch_and_save_profile(symbol: str, name: str, spot_df=None) -> bool:
 
         industry = "未知"
         try:
-            info_df = await asyncio.to_thread(fetch_stock_info, symbol)
-            info_map = dict(zip(info_df["item"], info_df["value"]))
-            industry = str(info_map.get("行业", "未知"))
+            info_result = await registry.fetch(DataCapability.STOCK_INFO, symbol=symbol)
+            if info_result.ok:
+                info_df = info_result.data
+                info_map = dict(zip(info_df["item"], info_df["value"]))
+                industry = str(info_map.get("行业", "未知"))
         except Exception:
             pass
 
@@ -220,62 +310,109 @@ async def _fetch_and_save_profile(symbol: str, name: str, spot_df=None) -> bool:
             "changeYtd": float(row.get("年初至今涨跌幅", 0) or 0),
             "volumeRatio": float(row.get("量比", 0) or 0),
         }
+
+        # Try to enhance with Yahoo data (automatic via registry)
+        yahoo_result = await registry.fetch(DataCapability.SPOT_QUOTE, symbol=symbol, preferred_source="yahoo")
+        if yahoo_result.ok and isinstance(yahoo_result.data, dict):
+            yahoo_fields = yahoo_result.data
+            if _date_only(profile.get("updateTime")) <= _date_only(yahoo_fields.get("updateTime")):
+                profile.update(yahoo_fields)
+
         data_store.save_stock_data(symbol, "profile", profile)
         return 1
     except Exception as e:
-        logger.error("[download] profile %s failed: %s", symbol, e)
+        logger.warning("[download] profile %s failed: %s", symbol, e)
         return 0
 
 
 async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
     try:
+        registry = get_registry()
         period_map = {"day": "daily", "week": "weekly", "month": "monthly"}
         ak_period = period_map.get(period, "daily")
 
-        # Incremental: if local data exists, only fetch from the last date
+        # Incremental: if local data exists, only fetch from the last date.
+        # If local history is missing or suspiciously short, keep a full-history
+        # fallback path so a realtime single bar cannot replace the whole series.
+        existing_rows = data_store.load_stock_data(symbol, f"kline_{period}")
+        existing_rows = existing_rows if isinstance(existing_rows, list) else []
+        needs_full_history = len(existing_rows) < 60
         last_date = data_store.get_last_kline_date(symbol, period)
         start_date = ""
-        if last_date:
+        if last_date and not needs_full_history:
             start_date = last_date.replace("-", "")
 
-        df = await asyncio.to_thread(fetch_stock_hist, symbol, ak_period, start_date, "", "qfq")
-        if df is None or df.empty:
+        fetched_rows = []
+
+        # Use registry with automatic failover (AKShare -> Yahoo)
+        result = await registry.fetch(
+            DataCapability.HISTORICAL_KLINE,
+            symbol=symbol,
+            period=ak_period,
+            start_date=start_date,
+            end_date="",
+            adjust="qfq",
+        )
+
+        if result.ok and result.data is not None:
+            df = result.data
+            logger.info("[download] kline_%s %s fetched from %s", period, symbol, result.source_name)
+
+            if result.source_name == "yahoo":
+                # Yahoo returns pre-processed rows
+                fetched_rows = df.to_dict("records") if hasattr(df, "to_dict") else df
+            else:
+                # AKShare returns raw DataFrame
+                closes = df["收盘"].tolist()
+
+                def ma(n: int, idx: int):
+                    if idx < n - 1:
+                        return None
+                    return round(sum(closes[idx - n + 1: idx + 1]) / n, 2)
+
+                for i, (_, row) in enumerate(df.iterrows()):
+                    fetched_rows.append({
+                        "date": str(row["日期"]),
+                        "open": float(row["开盘"]),
+                        "high": float(row["最高"]),
+                        "low": float(row["最低"]),
+                        "close": float(row["收盘"]),
+                        "volume": float(row["成交量"]),
+                        "ma5": ma(5, i),
+                        "ma10": ma(10, i),
+                        "ma20": ma(20, i),
+                        "ma60": ma(60, i),
+                    })
+
+        if period == "day":
+            realtime_row = _build_realtime_daily_kline_row(symbol, last_date)
+            if realtime_row is not None:
+                fetched_rows = [row for row in fetched_rows if row.get("date") != realtime_row["date"]]
+                fetched_rows.append(realtime_row)
+
+        if not fetched_rows:
+            _invalidate_kline_cache(symbol, period)
             return 0
 
-        closes = df["收盘"].tolist()
-
-        def ma(n: int, idx: int):
-            if idx < n - 1:
-                return None
-            return round(sum(closes[idx - n + 1: idx + 1]) / n, 2)
-
-        fetched_rows = []
-        for i, (_, row) in enumerate(df.iterrows()):
-            fetched_rows.append({
-                "date": str(row["日期"]),
-                "open": float(row["开盘"]),
-                "high": float(row["最高"]),
-                "low": float(row["最低"]),
-                "close": float(row["收盘"]),
-                "volume": float(row["成交量"]),
-                "ma5": ma(5, i),
-                "ma10": ma(10, i),
-                "ma20": ma(20, i),
-                "ma60": ma(60, i),
-            })
-
-        if last_date and fetched_rows:
-            # Incremental merge: keep existing, append only truly new dates
+        if last_date:
+            # Incremental merge: update overlapping current bar and append new dates.
             existing = data_store.load_stock_data(symbol, f"kline_{period}") or []
-            existing_dates = {r["date"] for r in existing}
-            truly_new = [r for r in fetched_rows if r["date"] not in existing_dates]
-            if not truly_new:
-                # Already up to date
+            merged_by_date = {str(row.get("date")): dict(row) for row in existing if row.get("date")}
+            changed_count = 0
+            for row in fetched_rows:
+                row_date = str(row.get("date") or "")
+                if not row_date:
+                    continue
+                if merged_by_date.get(row_date) != row:
+                    merged_by_date[row_date] = row
+                    changed_count += 1
+            if not changed_count:
+                _invalidate_kline_cache(symbol, period)
                 return 0
-            merged = existing + truly_new
-            # Recalculate MAs for the last 60 rows (boundary may shift)
+            merged = [merged_by_date[date] for date in sorted(merged_by_date)]
+            # Recalculate MAs after replacing the current bar or appending new rows.
             closes_all = [r["close"] for r in merged]
-            for j in range(max(0, len(merged) - 60), len(merged)):
+            for j in range(len(merged)):
                 for n in (5, 10, 20, 60):
                     key = f"ma{n}"
                     if j < n - 1:
@@ -283,13 +420,63 @@ async def _fetch_and_save_kline(symbol: str, period: str = "day") -> int:
                     else:
                         merged[j][key] = round(sum(closes_all[j - n + 1: j + 1]) / n, 2)
             data_store.save_stock_data(symbol, f"kline_{period}", merged)
-            return len(truly_new)
+            _invalidate_kline_cache(symbol, period)
+            return changed_count
         else:
             data_store.save_stock_data(symbol, f"kline_{period}", fetched_rows)
+            _invalidate_kline_cache(symbol, period)
             return len(fetched_rows)
     except Exception as e:
         logger.error("[download] kline_%s %s failed: %s", period, symbol, e)
         return 0
+
+
+def _build_realtime_daily_kline_row(symbol: str, last_date: str | None) -> dict | None:
+    profile = data_store.load_stock_data(symbol, "profile")
+    if not isinstance(profile, dict):
+        return None
+
+    profile_date = _date_only(profile.get("updateTime"))
+    if not profile_date or (last_date and profile_date <= last_date):
+        return None
+    if not _is_trade_date(profile_date):
+        return None
+
+    current_price = _safe_float(profile.get("currentPrice"))
+    open_price = _safe_float(profile.get("open"))
+    high_price = _safe_float(profile.get("high"))
+    low_price = _safe_float(profile.get("low"))
+    previous_close = _safe_float(profile.get("previousClose"))
+    volume = _safe_float(profile.get("volume"))
+    if min(current_price, open_price, high_price, low_price) <= 0 or volume <= 0:
+        return None
+
+    if last_date:
+        existing = data_store.load_stock_data(symbol, "kline_day") or []
+        last_row = next((row for row in reversed(existing) if row.get("date") == last_date), None)
+        last_close = _safe_float(last_row.get("close") if isinstance(last_row, dict) else None)
+        tolerance = max(0.03, last_close * 0.002)
+        if last_close > 0 and previous_close > 0 and abs(previous_close - last_close) > tolerance:
+            logger.info(
+                "[download] skip realtime kline %s: previousClose %.2f mismatches last close %.2f",
+                symbol,
+                previous_close,
+                last_close,
+            )
+            return None
+
+    return {
+        "date": profile_date,
+        "open": open_price,
+        "high": max(high_price, open_price, current_price),
+        "low": min(low_price, open_price, current_price),
+        "close": current_price,
+        "volume": volume,
+        "ma5": None,
+        "ma10": None,
+        "ma20": None,
+        "ma60": None,
+    }
 
 
 async def _fetch_and_save_financials(symbol: str) -> int:
@@ -302,12 +489,18 @@ async def _fetch_and_save_financials(symbol: str) -> int:
             _records_from_df,
         )
 
-        income_df, balance_df, cashflow_df, indicator_df = await asyncio.gather(
-            asyncio.to_thread(fetch_financial_report_em, symbol, "income"),
-            asyncio.to_thread(fetch_financial_report_em, symbol, "balance"),
-            asyncio.to_thread(fetch_financial_report_em, symbol, "cashflow"),
-            asyncio.to_thread(fetch_financial_indicators, symbol, "2016"),
+        registry = get_registry()
+        income_result, balance_result, cashflow_result, indicator_result = await asyncio.gather(
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="income"),
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="balance"),
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="cashflow"),
+            registry.fetch(DataCapability.FINANCIAL_INDICATORS, symbol=symbol, start_year="2016"),
         )
+
+        income_df = income_result.data if income_result.ok else None
+        balance_df = balance_result.data if balance_result.ok else None
+        cashflow_df = cashflow_result.data if cashflow_result.ok else None
+        indicator_df = indicator_result.data if indicator_result.ok else None
 
         if income_df is not None:
             _save_date_diff_records(
@@ -356,11 +549,16 @@ async def _fetch_and_save_financials(symbol: str) -> int:
 
         from services.stock_service import _assemble_financials
 
-        profit_df, balance_df, cashflow_df = await asyncio.gather(
-            asyncio.to_thread(fetch_financial_report, symbol, "profit"),
-            asyncio.to_thread(fetch_financial_report, symbol, "balance"),
-            asyncio.to_thread(fetch_financial_report, symbol, "cashflow"),
+        # Fallback to legacy Sina source
+        profit_result, balance_result, cashflow_result = await asyncio.gather(
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="profit", use_em=False),
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="balance", use_em=False),
+            registry.fetch(DataCapability.FINANCIAL_REPORT, symbol=symbol, report_type="cashflow", use_em=False),
         )
+
+        profit_df = profit_result.data if profit_result.ok else None
+        balance_df = balance_result.data if balance_result.ok else None
+        cashflow_df = cashflow_result.data if cashflow_result.ok else None
 
         if profit_df is None:
             if not data_store.has_stock_data(symbol, "financials"):
@@ -391,7 +589,11 @@ async def _fetch_and_save_news(symbol: str) -> int:
     existing = _load_list_data(symbol, "news")
     last_time = _max_record_date(existing, lambda record: record.get("publishTime"))
     try:
-        df = await asyncio.to_thread(fetch_stock_news, symbol, last_time if existing else None)
+        result = await get_registry().fetch(DataCapability.NEWS, symbol=symbol, since_time=last_time if existing else None)
+        if not result.ok:
+            logger.warning("[download] news %s failed: %s", symbol, result.error)
+            return 0
+        df = result.data
         results = []
         for i, (_, row) in enumerate(df.iterrows()):
             title = str(row.get("新闻标题", ""))
@@ -451,8 +653,13 @@ async def _fetch_and_save_news(symbol: str) -> int:
 
 async def _fetch_and_save_dividends(symbol: str) -> int:
     try:
-        df = await asyncio.to_thread(fetch_dividend_data, symbol)
-        if df is None or df.empty:
+        result = await get_registry().fetch(DataCapability.DIVIDEND, symbol=symbol)
+        if not result.ok or result.data is None:
+            if not data_store.has_stock_data(symbol, "dividends"):
+                data_store.save_stock_data(symbol, "dividends", [])
+            return 0
+        df = result.data
+        if df.empty:
             if not data_store.has_stock_data(symbol, "dividends"):
                 data_store.save_stock_data(symbol, "dividends", [])
             return 0
@@ -491,8 +698,13 @@ async def _fetch_and_save_notices(symbol: str) -> int:
     last_time = _max_record_date(existing, lambda record: record.get("publishTime"))
     try:
         start_date = _date_to_yyyymmdd(last_time) if existing else None
-        df = await asyncio.to_thread(fetch_stock_notices, symbol, start_date)
-        if df is None or df.empty:
+        result = await get_registry().fetch(DataCapability.NOTICES, symbol=symbol, start_date=start_date)
+        if not result.ok or result.data is None:
+            if not existing:
+                data_store.save_stock_data(symbol, "notices", [])
+            return 0
+        df = result.data
+        if df.empty:
             if not existing:
                 data_store.save_stock_data(symbol, "notices", [])
             return 0
@@ -528,8 +740,13 @@ async def _fetch_and_save_notices(symbol: str) -> int:
 
 async def _fetch_and_save_reports(symbol: str) -> int:
     try:
-        df = await asyncio.to_thread(fetch_stock_reports, symbol)
-        if df is None or df.empty:
+        result = await get_registry().fetch(DataCapability.RESEARCH_REPORTS, symbol=symbol)
+        if not result.ok or result.data is None:
+            if not data_store.has_stock_data(symbol, "reports"):
+                data_store.save_stock_data(symbol, "reports", [])
+            return 0
+        df = result.data
+        if df.empty:
             if not data_store.has_stock_data(symbol, "reports"):
                 data_store.save_stock_data(symbol, "reports", [])
             return 0
@@ -568,6 +785,14 @@ async def _fetch_and_save_reports(symbol: str) -> int:
 
 async def _download_single(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
     """Download all requested data types for a single stock. Returns {data_type: row_count}."""
+    return await _run_symbol_download(
+        symbol,
+        lambda: _download_single_unlocked(symbol, name, data_types, spot_df),
+    )
+
+
+async def _download_single_unlocked(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
+    """Download all requested data types for a single stock without acquiring locks."""
     stats: dict[str, int] = {}
     for dt in data_types:
         if dt == "profile":
@@ -592,6 +817,13 @@ async def _download_single(symbol: str, name: str, data_types: list[str], spot_d
 
 
 async def _download_single_with_progress(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
+    return await _run_symbol_download(
+        symbol,
+        lambda: _download_single_with_progress_unlocked(symbol, name, data_types, spot_df),
+    )
+
+
+async def _download_single_with_progress_unlocked(symbol: str, name: str, data_types: list[str], spot_df=None) -> dict[str, int]:
     global _single_download_state
     logs: list[str] = []
     _append_log(logs, f"开始下载 {symbol} {name}")
@@ -687,7 +919,11 @@ async def _run_download(symbols: list[dict], data_types: list[str], resume_from:
     spot_df = None
     if "profile" in data_types:
         try:
-            spot_df = await asyncio.to_thread(fetch_all_stocks)
+            spot_result = await get_registry().fetch(DataCapability.SPOT_QUOTE)
+            if spot_result.ok:
+                spot_df = spot_result.data
+            else:
+                logger.error("[download] failed to load spot data: %s", spot_result.error)
         except Exception as e:
             logger.error("[download] failed to load spot data: %s", e)
 
@@ -860,7 +1096,13 @@ async def refresh_single(symbol: str) -> dict:
     name = _get_stock_name(symbol)
     data_types = list(data_store.DATA_TYPES)
     try:
-        await _download_single(symbol, name, data_types)
+        stats = await _try_run_symbol_download(
+            symbol,
+            lambda: _download_single_unlocked(symbol, name, data_types),
+        )
+        if stats is None:
+            return {"status": "already_running", "symbol": symbol, "message": f"{symbol} 正在刷新中，请稍后查看"}
+        _invalidate_stock_caches(symbol)
         return {"status": "ok", "symbol": symbol, "message": f"Refreshed data for {symbol}"}
     except Exception as e:
         return {"status": "error", "symbol": symbol, "message": str(e)}
@@ -880,7 +1122,18 @@ async def refresh_missing(symbol: str) -> dict:
         }
 
     try:
-        stats = await _download_single(symbol, name, missing_data_types)
+        stats = await _try_run_symbol_download(
+            symbol,
+            lambda: _download_single_unlocked(symbol, name, missing_data_types),
+        )
+        if stats is None:
+            return {
+                "status": "already_running",
+                "symbol": symbol,
+                "missingDataTypes": missing_data_types,
+                "message": f"{symbol} 正在刷新中，请稍后查看",
+            }
+        _invalidate_stock_caches(symbol)
         still_missing = get_missing_data_types(symbol)
         fixed_data_types = [data_type for data_type in missing_data_types if data_type not in still_missing]
         status = "ok" if not still_missing else "partial"
