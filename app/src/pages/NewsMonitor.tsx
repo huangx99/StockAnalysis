@@ -461,6 +461,7 @@ function HitCard({ hit, ruleName, expanded, onToggle }: {
 }) {
   const badge = sentimentBadge[hit.sentiment] || sentimentBadge.neutral
   const isHigh = hit.importance >= 80 || hit.sentiment === 'negative'
+  const validUrl = !!hit.url && (hit.url.startsWith('http://') || hit.url.startsWith('https://'))
 
   return (
     <motion.div
@@ -495,7 +496,7 @@ function HitCard({ hit, ruleName, expanded, onToggle }: {
               </span>
             )}
           </div>
-          {hit.url ? (
+          {validUrl ? (
             <a href={hit.url} target="_blank" rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
               className="text-sm hover:underline" style={{ color: 'var(--text-primary)' }}>
@@ -509,7 +510,7 @@ function HitCard({ hit, ruleName, expanded, onToggle }: {
           <span className="text-xs font-medium" style={{
             color: hit.importance >= 80 ? '#ef4444' : hit.importance >= 60 ? '#eab308' : 'var(--text-muted)',
           }}>{hit.importance}</span>
-          {hit.url ? (
+          {validUrl ? (
             <a href={hit.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
               className="p-0.5 rounded hover:bg-bg-surface-hover" title="打开原文">
               <ExternalLink className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />

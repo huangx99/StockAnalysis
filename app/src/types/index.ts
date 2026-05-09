@@ -239,7 +239,7 @@ export interface AIReport {
 }
 
 export interface SystemStatus {
-  akshare: 'online' | 'offline';
+  dataEngine: 'online' | 'offline';
   aiService: 'online' | 'offline';
   dataSource: string;
   lastUpdate: string;

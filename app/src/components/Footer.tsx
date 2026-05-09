@@ -7,7 +7,7 @@ export default function Footer() {
       style={{ backgroundColor: 'var(--bg-surface)' }}
     >
       <div className="flex items-center gap-4 text-sm" style={{ color: 'var(--text-muted)' }}>
-        <span className="font-data-sm">AKShare</span>
+        <span className="font-data-sm">数据引擎</span>
         <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--success)' }} />
         <span className="font-data-sm">AI 服务</span>
         <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--success)' }} />

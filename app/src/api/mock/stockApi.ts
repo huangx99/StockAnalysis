@@ -338,7 +338,7 @@ export async function getAIReport(symbol: string): Promise<AIReport> {
 
 /**
  * GET /api/system/status
- * AKShare / AI service health
+ * Data engine / AI service health
  */
 /**
  * GET /api/stock/{symbol}/dividends
@@ -357,9 +357,9 @@ export async function getDividends(_symbol: string): Promise<DividendRecord[]> {
 export async function getSystemStatus(): Promise<SystemStatus> {
   await delay(100, 300);
   return {
-    akshare: 'online',
+    dataEngine: 'online',
     aiService: 'online',
-    dataSource: 'AKShare',
+    dataSource: 'default',
     lastUpdate: '2026-05-03 15:00:00',
   };
 }

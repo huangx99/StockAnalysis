@@ -1,10 +1,12 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query
-from services import news_sentiment_service
+from fastapi import APIRouter, Depends, HTTPException, Query
+from models.auth import UserPublic
+from services import auth_store, news_sentiment_service
 from services.monitor_engine import evaluate_condition_tree
 from services.news_sources import get_aggregator
+from middleware.security import validate_search_keyword, validate_search_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/news", tags=["news"])
@@ -72,27 +74,34 @@ async def search_news(
     limit: int = Query(30, ge=1, le=50),
 ):
     """Real-time web search for news by keyword with sentiment analysis."""
+    error = validate_search_keyword(keyword)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    limit = validate_search_limit(limit)
     try:
-        return await news_sentiment_service.search_news_with_sentiment(keyword, limit)
+        return await news_sentiment_service.search_news_with_sentiment(keyword.strip(), limit)
     except Exception as e:
         logger.exception("Failed to search news")
         return {"items": [], "total": 0, "keyword": keyword, "error": str(e)}
 
 
 @router.post("/sentiment/search")
-async def search_news_filtered(body: dict[str, Any]):
-    """Search news with condition tree filtering."""
+async def search_news_filtered(
+    body: dict[str, Any],
+    user: UserPublic = Depends(auth_store.get_current_user),
+):
+    """Search news with condition tree filtering. Requires login."""
     keyword = (body.get("keyword") or "").strip()
-    if not keyword:
-        return {"items": [], "total": 0, "keyword": ""}
-    limit = min(int(body.get("limit", 30)), 50)
+    error = validate_search_keyword(keyword)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    limit = validate_search_limit(int(body.get("limit", 30)))
     condition_tree = body.get("conditionTree")
 
     try:
         result = await news_sentiment_service.search_news_with_sentiment(keyword, limit)
         items = result.get("items", [])
 
-        # Apply condition tree filtering
         if condition_tree and isinstance(condition_tree, dict):
             filtered = []
             for item in items:

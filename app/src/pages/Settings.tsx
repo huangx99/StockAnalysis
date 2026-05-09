@@ -136,7 +136,7 @@ export default function Settings() {
                 description="选择股票行情数据的来源"
                 value={settings.dataSource}
                 options={[
-                  { value: 'AKShare', label: 'AKShare (默认)' },
+                  { value: 'default', label: '默认数据源' },
                   { value: 'Tushare', label: 'Tushare' },
                   { value: 'Baostock', label: 'Baostock' },
                   { value: 'custom', label: '自定义' },
@@ -486,7 +486,7 @@ export default function Settings() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                      <span className="font-body" style={{ color: 'var(--text-primary)' }}>AKShare 正常运行</span>
+                      <span className="font-body" style={{ color: 'var(--text-primary)' }}>数据引擎正常运行</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-success animate-pulse" />

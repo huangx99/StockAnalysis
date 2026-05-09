@@ -297,7 +297,7 @@ export default function Home() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--success)' }} />
-            <span className="font-data-sm" style={{ color: 'var(--text-secondary)' }}>AKShare</span>
+            <span className="font-data-sm" style={{ color: 'var(--text-secondary)' }}>数据引擎</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--success)' }} />

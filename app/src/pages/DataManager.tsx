@@ -954,7 +954,7 @@ export default function DataManager() {
                       </div>
                     ) : industryStocks.length === 0 ? (
                       <div className="rounded-lg border border-border-subtle p-4 text-sm" style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-elevated)' }}>
-                        该板块暂未找到股票。可返回选择其他板块，或确认本地基本信息/AKShare 板块数据是否可用。
+                        该板块暂未找到股票。可返回选择其他板块，或确认本地基本信息/板块数据是否可用。
                       </div>
                     ) : (
                       <div className="border border-border-subtle rounded-lg overflow-hidden max-h-96 overflow-y-auto">

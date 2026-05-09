@@ -21,7 +21,7 @@ export interface SettingsState {
 const STORAGE_KEY = 'a-stock-ai-settings'
 
 const defaultSettings: SettingsState = {
-  dataSource: 'AKShare',
+  dataSource: 'default',
   refreshInterval: 15,
   theme: 'dark',
   colorScheme: 'a-share',

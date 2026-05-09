@@ -3,7 +3,7 @@ from typing import Literal
 
 
 class SystemStatus(BaseModel):
-    akshare: Literal["online", "offline"]
+    dataEngine: Literal["online", "offline"]
     aiService: Literal["online", "offline"]
     dataSource: str
     lastUpdate: str

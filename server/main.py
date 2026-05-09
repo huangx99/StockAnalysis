@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from routers import stocks, system, ai, screener, backtest, auth, news
+from middleware.security import SecurityMiddleware
 from utils.logging_config import setup_logging
 from services.stock_service import prewarm_spot_cache
 from services.auth_store import ensure_seed_admin
@@ -32,6 +33,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SecurityMiddleware)
 
 
 @app.middleware("http")

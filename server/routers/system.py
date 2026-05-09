@@ -90,9 +90,9 @@ async def status():
         ai_status = "offline"
 
     return SystemStatus(
-        akshare=ak_status,
+        dataEngine=ak_status,
         aiService=ai_status,
-        dataSource="AKShare",
+        dataSource="default",
         lastUpdate=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
