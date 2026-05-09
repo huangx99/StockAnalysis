@@ -662,6 +662,13 @@ export async function searchNewsRealtime(keyword: string, limit?: number): Promi
   return request(`${BASE}/news/sentiment/search?${query.toString()}`);
 }
 
+export async function searchNewsFiltered(keyword: string, conditionTree?: import('@/types').ConditionNode | null, limit?: number): Promise<{items: NewsSentimentItem[], total: number, keyword: string}> {
+  return request(`${BASE}/news/sentiment/search`, {
+    method: 'POST',
+    body: JSON.stringify({ keyword, conditionTree: conditionTree || null, limit: limit || 30 }),
+  });
+}
+
 // ── Monitor ──
 
 export async function getMonitorRules(): Promise<import('@/types').MonitorRule[]> {

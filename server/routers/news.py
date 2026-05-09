@@ -1,6 +1,9 @@
 import logging
+from typing import Any
+
 from fastapi import APIRouter, Query
 from services import news_sentiment_service
+from services.monitor_engine import evaluate_condition_tree
 from services.news_sources import get_aggregator
 
 logger = logging.getLogger(__name__)
@@ -73,6 +76,33 @@ async def search_news(
         return await news_sentiment_service.search_news_with_sentiment(keyword, limit)
     except Exception as e:
         logger.exception("Failed to search news")
+        return {"items": [], "total": 0, "keyword": keyword, "error": str(e)}
+
+
+@router.post("/sentiment/search")
+async def search_news_filtered(body: dict[str, Any]):
+    """Search news with condition tree filtering."""
+    keyword = (body.get("keyword") or "").strip()
+    if not keyword:
+        return {"items": [], "total": 0, "keyword": ""}
+    limit = min(int(body.get("limit", 30)), 50)
+    condition_tree = body.get("conditionTree")
+
+    try:
+        result = await news_sentiment_service.search_news_with_sentiment(keyword, limit)
+        items = result.get("items", [])
+
+        # Apply condition tree filtering
+        if condition_tree and isinstance(condition_tree, dict):
+            filtered = []
+            for item in items:
+                if evaluate_condition_tree(condition_tree, item):
+                    filtered.append(item)
+            items = filtered
+
+        return {"items": items, "total": len(items), "keyword": keyword}
+    except Exception as e:
+        logger.exception("Failed to search news with filter")
         return {"items": [], "total": 0, "keyword": keyword, "error": str(e)}
 
 

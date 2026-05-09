@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Loader2, Plus, Pencil, Trash2, Play, Search, X, Mail, MailX,
+  Loader2, Plus, Pencil, Trash2, Play, X, Mail, MailX,
   Bell, ChevronDown, ChevronRight, ChevronUp, ExternalLink, ToggleLeft, ToggleRight, Sparkles,
   Share2, Import,
 } from 'lucide-react'
@@ -10,9 +10,9 @@ import { Button } from '@/components/ui/button'
 import ConditionEditor from '@/components/ConditionEditor'
 import {
   getMonitorRules, createMonitorRule, updateMonitorRule, deleteMonitorRule,
-  getMonitorHits, testMonitorRule, getMonitorStats, searchNewsRealtime, generateMonitorRule,
+  getMonitorHits, testMonitorRule, getMonitorStats, generateMonitorRule,
 } from '@/api/real/stockApi'
-import type { MonitorRule, MonitorHit, MonitorStats, NewsSentimentItem, ConditionNode } from '@/types'
+import type { MonitorRule, MonitorHit, MonitorStats, ConditionNode } from '@/types'
 
 const sentimentBadge: Record<string, { label: string; color: string; bg: string }> = {
   positive: { label: '利好', color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
@@ -48,12 +48,6 @@ export default function NewsMonitor() {
   const [filterRule, setFilterRule] = useState<string>('')
   const [expandedHit, setExpandedHit] = useState<string | null>(null)
   const [showHits, setShowHits] = useState(false)
-
-  // Search state
-  const [searchInput, setSearchInput] = useState('')
-  const [searchResults, setSearchResults] = useState<NewsSentimentItem[] | null>(null)
-  const [searching, setSearching] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
 
   // Import state
   const [showImport, setShowImport] = useState(false)
@@ -184,28 +178,6 @@ export default function NewsMonitor() {
     }
   }
 
-  const handleSearch = async () => {
-    const q = searchInput.trim()
-    if (!q) return
-    setSearching(true)
-    setSearchQuery(q)
-    try {
-      const result = await searchNewsRealtime(q, 30)
-      setSearchResults(result.items || [])
-    } catch (e) {
-      console.error('Search failed:', e)
-      setSearchResults([])
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  const clearSearch = () => {
-    setSearchInput('')
-    setSearchQuery('')
-    setSearchResults(null)
-  }
-
   const openNewRule = () => {
     setEditingRule({
       name: '',
@@ -234,12 +206,11 @@ export default function NewsMonitor() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>新闻监控</h1>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
             {stats ? `${stats.ruleCount} 条规则 · ${stats.todayHits} 条今日命中 · ${stats.alertedCount} 条告警` : '加载中...'}
           </p>
         </div>
@@ -328,63 +299,6 @@ export default function NewsMonitor() {
           )}
         </div>
       )}
-
-      {/* Search */}
-      <div className="rounded-lg border p-4" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
-        <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>实时搜索</h3>
-        <div className="flex items-center gap-2 mb-3">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              placeholder="搜索关键词..."
-              className="w-full pl-9 pr-3 py-2 rounded-lg text-sm border outline-none focus:ring-1"
-              style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' } as React.CSSProperties}
-            />
-          </div>
-          <Button onClick={handleSearch} disabled={searching || !searchInput.trim()} variant="outline" size="sm">
-            {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          </Button>
-          {searchQuery && (
-            <Button onClick={clearSearch} variant="outline" size="sm">
-              <X className="w-4 h-4" />
-            </Button>
-          )}
-        </div>
-        {searchQuery && (
-          <div className="space-y-2">
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              搜索结果: {searchQuery} ({searchResults?.length || 0}条)
-            </span>
-            {searchResults?.map((item) => (
-              <div key={item.id} className="flex items-start gap-2 p-2 rounded" style={{ backgroundColor: 'var(--bg-elevated)' }}>
-                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0"
-                  style={{ backgroundColor: sentimentBadge[item.sentiment]?.bg, color: sentimentBadge[item.sentiment]?.color }}>
-                  {sentimentBadge[item.sentiment]?.label}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{item.title}</span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{item.source}</span>
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{fmtTime(item.publishTime)}</span>
-                  </div>
-                </div>
-                {item.url && (
-                  <a href={item.url} target="_blank" rel="noopener noreferrer" className="shrink-0">
-                    <ExternalLink className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-                  </a>
-                )}
-              </div>
-            ))}
-            {searchResults && searchResults.length === 0 && (
-              <div className="text-center py-4 text-sm" style={{ color: 'var(--text-muted)' }}>无搜索结果</div>
-            )}
-          </div>
-        )}
-      </div>
 
       {/* Rule Editor Modal */}
       <AnimatePresence>

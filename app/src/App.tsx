@@ -15,7 +15,7 @@ import Login from './pages/Login'
 import Watchlist from './pages/Watchlist'
 import UserAdmin from './pages/UserAdmin'
 import Profile from './pages/Profile'
-import NewsMonitor from './pages/NewsMonitor'
+import NewsHub from './pages/NewsHub'
 
 export default function App() {
   return (
@@ -32,7 +32,7 @@ export default function App() {
           <Route path="/industry" element={<IndustryCompare />} />
           <Route path="/backtest" element={<BacktestValidation />} />
           <Route path="/sector" element={<SectorAnalysis />} />
-          <Route path="/news" element={<NewsMonitor />} />
+          <Route path="/news" element={<NewsHub />} />
         </Route>
       </Route>
       <Route element={<ProtectedRoute adminOnly />}>
